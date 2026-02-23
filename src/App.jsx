@@ -92,95 +92,34 @@ async function fmpFetch(endpoint, apiKey) {
   } catch { return null; }
 }
 
-// Fetch live quote for one or more symbols
 async function fetchQuotes(symbols, apiKey) {
   if (!apiKey || !symbols.length) return [];
-  const list = symbols.join(",");
-  return (await fmpFetch(`/quote/${list}`, apiKey)) || [];
+  return (await fmpFetch(`/quote/${symbols.join(",")}`, apiKey)) || [];
 }
 
-// Fetch market movers
-async function fetchMarketMovers(apiKey) {
-  const [gainers, losers, actives] = await Promise.all([
-    fmpFetch("/stock_market/gainers", apiKey),
-    fmpFetch("/stock_market/losers", apiKey),
-    fmpFetch("/stock_market/actives", apiKey),
-  ]);
-  return { gainers: (gainers || []).slice(0, 5), losers: (losers || []).slice(0, 5), actives: (actives || []).slice(0, 5) };
-}
-
-// Fetch full stock analysis data
-async function fetchStockAnalysis(ticker, apiKey) {
-  const [quote, ratios, dcf, profile, metrics] = await Promise.all([
-    fmpFetch(`/quote/${ticker}`, apiKey),
-    fmpFetch(`/ratios-ttm/${ticker}`, apiKey),
-    fmpFetch(`/discounted-cash-flow/${ticker}`, apiKey),
-    fmpFetch(`/profile/${ticker}`, apiKey),
-    fmpFetch(`/key-metrics-ttm/${ticker}`, apiKey),
-  ]);
-  if (!quote?.[0]) return null;
-  const q = quote[0], r = ratios?.[0] || {}, d = dcf?.[0] || {}, p = profile?.[0] || {}, m = metrics?.[0] || {};
-  const pe = r.peRatioTTM || q.pe || 0;
-  const pb = r.priceToBookRatioTTM || 0;
-  const ps = r.priceToSalesRatioTTM || 0;
-  const evEbitda = r.enterpriseValueOverEBITDATTM || m.enterpriseValueOverEBITDATTM || 0;
-  const dcfVal = d.dcf || q.price * 0.9;
-  // Score: lower PE/PB/PS relative to price = better value
-  const valScore = Math.max(0, Math.min(100, dcfVal > 0 ? Math.round(((dcfVal - q.price) / q.price) * 100 + 50) : 50));
-  const sentScore = Math.max(0, Math.min(100, Math.round(50 + (q.changesPercentage || 0) * 3)));
-  const overall = Math.round(valScore * 0.6 + sentScore * 0.4);
-
-  return {
-    ticker: q.symbol, name: q.name || p.companyName || ticker, sector: p.sector || "N/A",
-    price: q.price, change: q.change || 0, changePct: q.changesPercentage || 0,
-    marketCap: q.marketCap ? (q.marketCap >= 1e12 ? (q.marketCap / 1e12).toFixed(2) + "T" : (q.marketCap / 1e9).toFixed(1) + "B") : "N/A",
-    peRatio: +pe.toFixed(1), pbRatio: +pb.toFixed(1), psRatio: +ps.toFixed(1), evEbitda: +evEbitda.toFixed(1),
-    dividendYield: +(r.dividendYieldTTM || p.lastDiv / q.price || 0).toFixed(2),
-    beta: +(p.beta || 1).toFixed(2),
-    week52High: q.yearHigh || 0, week52Low: q.yearLow || 0,
-    dcfBase: +dcfVal.toFixed(2),
-    dcfBear: +(dcfVal * 0.8).toFixed(2),
-    dcfBull: +(dcfVal * 1.3).toFixed(2),
-    valuationScore: valScore, sentimentScore: sentScore, overallScore: overall,
-    published: false, adminRemarks: "",
-    peHistAvg: +(pe * 0.85).toFixed(1), peIndustryAvg: +(pe * 0.92).toFixed(1),
-    pbHistAvg: +(pb * 0.8).toFixed(1), pbIndustryAvg: +(pb * 0.95).toFixed(1),
-    psHistAvg: +(ps * 0.82).toFixed(1), psIndustryAvg: +(ps * 0.9).toFixed(1),
-    evEbitdaHistAvg: +(evEbitda * 0.87).toFixed(1), evEbitdaIndustryAvg: +(evEbitda * 0.93).toFixed(1),
-    newsHeadlines: [],
-    fetchedAt: Date.now(),
-  };
+async function fetchNews(apiKey, limit = 20) {
+  if (!apiKey) return [];
+  return (await fmpFetch(`/stock_news?limit=${limit}`, apiKey)) || [];
 }
 
 // ═══════════════════════════════════════════════════
 // P&L FORMULAS
 // ═══════════════════════════════════════════════════
-function calcUnrealizedPnL(shares, costBasis, currentPrice) {
-  return (currentPrice - costBasis) * shares;
-}
-function calcUnrealizedReturn(costBasis, currentPrice) {
-  if (costBasis === 0) return 0;
-  return ((currentPrice - costBasis) / costBasis) * 100;
-}
-function calcRealizedPnL(shares, costBasis, sellPrice) {
-  return (sellPrice - costBasis) * shares;
-}
-function calcRealizedReturn(costBasis, sellPrice) {
-  if (costBasis === 0) return 0;
-  return ((sellPrice - costBasis) / costBasis) * 100;
-}
+function calcUnrealizedPnL(shares, costBasis, currentPrice) { return (currentPrice - costBasis) * shares; }
+function calcUnrealizedReturn(costBasis, currentPrice) { return costBasis === 0 ? 0 : ((currentPrice - costBasis) / costBasis) * 100; }
+function calcRealizedPnL(shares, costBasis, sellPrice) { return (sellPrice - costBasis) * shares; }
+function calcRealizedReturn(costBasis, sellPrice) { return costBasis === 0 ? 0 : ((sellPrice - costBasis) / costBasis) * 100; }
 
 // ═══════════════════════════════════════════════════
 // UI COMPONENTS
 // ═══════════════════════════════════════════════════
-function ValuationGauge({ value, size = 160, label, type = "valuation" }) {
+function ValuationGauge({ value, size = 160, label }) {
   const r = size * 0.4, cx = size / 2, cy = size / 2 + 8;
   const startAngle = Math.PI * 0.8, endAngle = Math.PI * 0.2 + Math.PI;
-  const totalAngle = endAngle - startAngle;
-  const valueAngle = startAngle + (value / 100) * totalAngle;
-  const arcPath = (start, end) => { const x1 = cx + r * Math.cos(start), y1 = cy + r * Math.sin(start), x2 = cx + r * Math.cos(end), y2 = cy + r * Math.sin(end); return `M ${x1} ${y1} A ${r} ${r} 0 ${end - start > Math.PI ? 1 : 0} 1 ${x2} ${y2}`; };
-  const color = type === "valuation" ? (value >= 66 ? T.green : value >= 33 ? T.amber : T.red) : (value >= 66 ? T.green : value >= 33 ? T.amber : T.red);
-  const ratingText = type === "valuation" ? (value >= 66 ? "Undervalued" : value >= 33 ? "Fair Value" : "Overvalued") : (value >= 66 ? "Bullish" : value >= 33 ? "Neutral" : "Bearish");
+  const valueAngle = startAngle + (value / 100) * (endAngle - startAngle);
+  const arcPath = (s, e) => { const x1 = cx + r * Math.cos(s), y1 = cy + r * Math.sin(s), x2 = cx + r * Math.cos(e), y2 = cy + r * Math.sin(e); return `M ${x1} ${y1} A ${r} ${r} 0 ${e - s > Math.PI ? 1 : 0} 1 ${x2} ${y2}`; };
+  const color = value >= 66 ? T.green : value >= 33 ? T.amber : T.red;
+  const ratingText = value >= 66 ? "Undervalued" : value >= 33 ? "Fair Value" : "Overvalued";
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <path d={arcPath(startAngle, endAngle)} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={6} strokeLinecap="round" />
@@ -192,225 +131,63 @@ function ValuationGauge({ value, size = 160, label, type = "valuation" }) {
   );
 }
 
-function Sparkline({ data, color = T.green, width = 80, height = 30 }) {
-  if (!data?.length) return null;
-  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * height}`).join(" ");
-  return <svg width={width} height={height}><polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" /></svg>;
-}
-
 function StockCard({ stock, onClick }) {
   if (!stock) return null;
-  const ratingColor = stock.overallScore >= 66 ? T.green : stock.overallScore >= 33 ? T.amber : T.red;
-  const ratingLabel = stock.overallScore >= 66 ? "BUY" : stock.overallScore >= 33 ? "HOLD" : "SELL";
+  const color = stock.rating === "BUY" ? T.green : stock.rating === "HOLD" ? T.amber : T.red;
   return (
     <div onClick={onClick} style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, cursor: "pointer", transition: "all 0.2s ease" }}
       onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-2px)"; }}
       onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
         <div><div style={{ fontWeight: 800, fontSize: 16, fontFamily: T.mono }}>{stock.ticker}</div><div style={{ fontSize: 11, color: T.textDim, marginTop: 2 }}>{stock.name}</div></div>
-        <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: `${ratingColor}10`, color: ratingColor, fontFamily: T.mono }}>{ratingLabel}</span>
+        <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: `${color}10`, color, fontFamily: T.mono }}>{stock.rating}</span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-        <div><div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.mono }}>${stock.price?.toFixed(2)}</div><div style={{ fontSize: 11, fontWeight: 600, color: stock.changePct >= 0 ? T.green : T.red, fontFamily: T.mono, marginTop: 2 }}>{stock.changePct >= 0 ? "+" : ""}{stock.changePct?.toFixed(2)}%</div></div>
-        <div style={{ display: "flex", gap: 4 }}>
-          <ValuationGauge value={stock.valuationScore} size={55} type="valuation" />
-          <ValuationGauge value={stock.sentimentScore} size={55} type="sentiment" />
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.mono }}>${(stock.price || 0).toFixed(2)}</div>
+          {stock.sector && <div style={{ fontSize: 10, color: T.textDim, marginTop: 4, fontFamily: T.mono }}>{stock.sector}</div>}
         </div>
+        <ValuationGauge value={stock.valuationScore || 50} size={60} />
       </div>
+      {stock.notes && <div style={{ fontSize: 11, color: T.textDim, marginTop: 12, lineHeight: 1.6, borderTop: `1px solid ${T.border}`, paddingTop: 10, whiteSpace: "pre-wrap", overflow: "hidden", maxHeight: 48, textOverflow: "ellipsis" }}>{stock.notes}</div>}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════
-// STOCK PREVIEW POPUP
-// ═══════════════════════════════════════════════════
-function StockPreview({ stock, onClose, isAdmin, onPublish, onUpdateRemarks }) {
-  const [editRemarks, setEditRemarks] = useState(false);
-  const [remarks, setRemarks] = useState(stock.adminRemarks || "");
+function StockPreview({ stock, onClose }) {
   if (!stock) return null;
-  const ratingColor = stock.overallScore >= 66 ? T.green : stock.overallScore >= 33 ? T.amber : T.red;
-  const ratingLabel = stock.overallScore >= 66 ? "BUY" : stock.overallScore >= 33 ? "HOLD" : "SELL";
-  const ratioStatus = (current, hist, ind) => {
-    if (!current || current === 0) return { label: "N/A", color: T.textDim };
-    const avg = (hist + ind) / 2;
-    if (current < avg * 0.9) return { label: "Below Avg", color: T.green };
-    if (current > avg * 1.1) return { label: "Above Avg", color: T.red };
-    return { label: "In-Line", color: T.amber };
-  };
-  const upside = stock.dcfBase ? ((stock.dcfBase - stock.price) / stock.price * 100).toFixed(1) : "0";
-
+  const color = stock.rating === "BUY" ? T.green : stock.rating === "HOLD" ? T.amber : T.red;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)" }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ width: "90%", maxWidth: 700, maxHeight: "85vh", overflow: "auto", background: "#0a0a10", borderRadius: 16, border: `1px solid ${T.border}`, padding: 28 }}>
-        {/* Header */}
+      <div onClick={e => e.stopPropagation()} style={{ width: "90%", maxWidth: 600, maxHeight: "85vh", overflow: "auto", background: "#0a0a10", borderRadius: 16, border: `1px solid ${T.border}`, padding: 28 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, fontFamily: T.mono }}>{stock.ticker}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 4, background: `${ratingColor}10`, color: ratingColor, boxShadow: `0 0 12px ${ratingColor}15`, fontFamily: T.mono }}>{ratingLabel}</span>
+              <span style={{ fontSize: 24, fontWeight: 800, fontFamily: T.mono }}>{stock.ticker}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 4, background: `${color}10`, color, fontFamily: T.mono }}>{stock.rating}</span>
             </div>
-            <div style={{ fontSize: 12, color: T.textDim, marginTop: 4 }}>{stock.name} · {stock.sector} · MCap {stock.marketCap}</div>
+            <div style={{ fontSize: 12, color: T.textDim, marginTop: 4 }}>{stock.name}{stock.sector ? ` \u00B7 ${stock.sector}` : ""}</div>
           </div>
-          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.04)", border: "none", color: T.textDim, width: 32, height: 32, borderRadius: 8, cursor: "pointer", fontSize: 16 }}>✕</button>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.04)", border: "none", color: T.textDim, width: 32, height: 32, borderRadius: 8, cursor: "pointer", fontSize: 16 }}>\u2715</button>
         </div>
-        {/* Price */}
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 20 }}>
-          <span style={{ fontSize: 28, fontWeight: 800, fontFamily: T.mono }}>${stock.price?.toFixed(2)}</span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: stock.changePct >= 0 ? T.green : T.red, fontFamily: T.mono }}>{stock.changePct >= 0 ? "+" : ""}{stock.changePct?.toFixed(2)}%</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 24 }}>
+          <span style={{ fontSize: 32, fontWeight: 800, fontFamily: T.mono }}>${(stock.price || 0).toFixed(2)}</span>
         </div>
-        {/* Gauges */}
-        <div style={{ display: "flex", gap: 20, marginBottom: 24 }}>
-          <ValuationGauge value={stock.valuationScore} size={130} label="Valuation" type="valuation" />
-          <ValuationGauge value={stock.sentimentScore} size={130} label="Sentiment" type="sentiment" />
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}>
+          <ValuationGauge value={stock.valuationScore || 50} size={150} label="Valuation" />
         </div>
-
-        {/* Valuation Ratios */}
-        <div style={{ marginBottom: 20, padding: 16, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}` }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, marginBottom: 12, fontFamily: T.mono, letterSpacing: "0.12em" }}>VALUATION RATIOS</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            {[
-              { label: "P/E", val: stock.peRatio, hist: stock.peHistAvg, ind: stock.peIndustryAvg },
-              { label: "P/B", val: stock.pbRatio, hist: stock.pbHistAvg, ind: stock.pbIndustryAvg },
-              { label: "P/S", val: stock.psRatio, hist: stock.psHistAvg, ind: stock.psIndustryAvg },
-              { label: "EV/EBITDA", val: stock.evEbitda, hist: stock.evEbitdaHistAvg, ind: stock.evEbitdaIndustryAvg },
-            ].map(r => {
-              const st = ratioStatus(r.val, r.hist, r.ind);
-              return (
-                <div key={r.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
-                  <span style={{ fontSize: 11, color: T.textMuted }}>{r.label}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, fontFamily: T.mono }}>{r.val?.toFixed(1) || "—"}</span>
-                    <span style={{ fontSize: 8, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: `${st.color}10`, color: st.color, fontFamily: T.mono }}>{st.label}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* DCF */}
-        <div style={{ marginBottom: 20, padding: 16, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}` }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, marginBottom: 12, fontFamily: T.mono, letterSpacing: "0.12em" }}>DCF INTRINSIC VALUE</div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
-            <span style={{ fontSize: 18, fontWeight: 800, fontFamily: T.mono }}>${stock.dcfBase?.toFixed(2)}</span>
-            <span style={{ fontSize: 12, fontWeight: 600, color: +upside >= 0 ? T.green : T.red, fontFamily: T.mono }}>{+upside >= 0 ? "+" : ""}{upside}% {+upside >= 0 ? "upside" : "downside"}</span>
-          </div>
-          <div style={{ display: "flex", gap: 16, fontSize: 11, color: T.textDim }}>
-            <span>Bear: <span style={{ color: T.red, fontFamily: T.mono }}>${stock.dcfBear?.toFixed(2)}</span></span>
-            <span>Base: <span style={{ color: T.amber, fontFamily: T.mono }}>${stock.dcfBase?.toFixed(2)}</span></span>
-            <span>Bull: <span style={{ color: T.green, fontFamily: T.mono }}>${stock.dcfBull?.toFixed(2)}</span></span>
-          </div>
-        </div>
-
-        {/* Admin Remarks */}
-        <div style={{ marginBottom: 20, padding: 16, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.12em" }}>ADMIN REMARKS</div>
-            {isAdmin && <button onClick={() => { if (editRemarks) { onUpdateRemarks(stock.ticker, remarks); } setEditRemarks(!editRemarks); }}
-              style={{ fontSize: 9, padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.accent, cursor: "pointer", fontFamily: T.mono }}>{editRemarks ? "Save" : "Edit"}</button>}
-          </div>
-          {isAdmin && editRemarks ? (
-            <textarea value={remarks} onChange={e => setRemarks(e.target.value)} rows={3}
-              style={{ width: "100%", background: "rgba(255,255,255,0.03)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 12, padding: 10, resize: "vertical", outline: "none", fontFamily: T.sans }} />
-          ) : (
-            <div style={{ fontSize: 12, color: stock.adminRemarks ? T.textMuted : T.textDim, lineHeight: 1.7, fontStyle: stock.adminRemarks ? "normal" : "italic" }}>
-              {stock.adminRemarks || "No remarks yet."}
-            </div>
-          )}
-        </div>
-
-        {/* Admin actions */}
-        {isAdmin && (
-          <div style={{ display: "flex", gap: 10 }}>
-            <button onClick={() => onPublish(stock.ticker)}
-              style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: stock.published ? `${T.red}15` : `${T.green}15`, color: stock.published ? T.red : T.green, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.mono }}>
-              {stock.published ? "Unpublish from Top Picks" : "Publish to Top Picks"}
-            </button>
+        {stock.notes && (
+          <div style={{ padding: 16, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}`, marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.12em", marginBottom: 10 }}>ANALYSIS NOTES</div>
+            <div style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{stock.notes}</div>
           </div>
         )}
+        {stock.dateAdded && <div style={{ fontSize: 10, color: T.textDim, fontFamily: T.mono, textAlign: "right" }}>Added {stock.dateAdded}</div>}
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════
-// MARKET PULSE COMPONENT
-// ═══════════════════════════════════════════════════
-function MarketPulse({ marketData, loading, onRefresh, lastUpdated }) {
-  if (!marketData && !loading) return (
-    <div style={{ textAlign: "center", padding: 60 }}>
-      <div style={{ fontSize: 14, color: T.textDim, marginBottom: 16 }}>Configure your FMP API key in Admin → Settings to enable live market data.</div>
-    </div>
-  );
-
-  const fmt = (n) => n ? (n >= 0 ? "+" : "") + n.toFixed(2) + "%" : "—";
-  const fmtPrice = (n) => n ? "$" + n.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
-
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <div><h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>Market Pulse</h1>
-          <p style={{ fontSize: 13, color: T.textDim }}>Live market data · Auto-refreshes every 5 minutes</p></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {lastUpdated && <span style={{ fontSize: 10, color: T.textDim, fontFamily: T.mono }}>Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
-          <button onClick={onRefresh} disabled={loading}
-            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${T.border}`, background: loading ? "rgba(255,255,255,0.02)" : "transparent", color: loading ? T.textDim : T.accent, fontSize: 11, fontWeight: 600, cursor: loading ? "wait" : "pointer", fontFamily: T.mono }}>
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-      </div>
-
-      {/* Major Indices */}
-      {marketData?.indices?.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 28 }}>
-          {marketData.indices.map(idx => (
-            <div key={idx.symbol} style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
-              <div style={{ fontSize: 11, color: T.textDim, fontFamily: T.mono, marginBottom: 6 }}>{idx.name || idx.symbol}</div>
-              <div style={{ fontSize: 22, fontWeight: 800, fontFamily: T.mono }}>{fmtPrice(idx.price)}</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: idx.changesPercentage >= 0 ? T.green : T.red, fontFamily: T.mono, marginTop: 4 }}>
-                {idx.change >= 0 ? "+" : ""}{idx.change?.toFixed(2)} ({fmt(idx.changesPercentage)})
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Movers */}
-      {marketData?.movers && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 28 }}>
-          {[
-            { title: "TOP GAINERS", data: marketData.movers.gainers, color: T.green },
-            { title: "TOP LOSERS", data: marketData.movers.losers, color: T.red },
-            { title: "MOST ACTIVE", data: marketData.movers.actives, color: T.cyan },
-          ].map(sec => (
-            <div key={sec.title} style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: sec.color, fontFamily: T.mono, letterSpacing: "0.12em", marginBottom: 14 }}>{sec.title}</div>
-              {sec.data?.map(s => (
-                <div key={s.symbol} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: T.mono }}>{s.symbol}</div>
-                    <div style={{ fontSize: 9, color: T.textDim, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 11, fontFamily: T.mono }}>{fmtPrice(s.price)}</div>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: s.changesPercentage >= 0 ? T.green : T.red, fontFamily: T.mono }}>{fmt(s.changesPercentage)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {loading && <div style={{ textAlign: "center", padding: 40, color: T.textDim, fontSize: 13 }}>Loading market data...</div>}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════
-// TABLE HELPER
-// ═══════════════════════════════════════════════════
 function TH({ cols }) {
   return <thead><tr>{cols.map(c => <th key={c} style={{ padding: "12px 16px", textAlign: "left", fontSize: 9, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.12em", textTransform: "uppercase", borderBottom: `1px solid ${T.border}` }}>{c}</th>)}</tr></thead>;
 }
@@ -419,7 +196,6 @@ function TH({ cols }) {
 // MAIN APP
 // ═══════════════════════════════════════════════════
 export default function App() {
-  // ── State ──
   const [page, setPage] = useState("home");
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminPass, setAdminPass] = useState("");
@@ -427,36 +203,44 @@ export default function App() {
   const [notification, setNotification] = useState(null);
   const [mounted, setMounted] = useState(false);
   const [selectedStock, setSelectedStock] = useState(null);
-  const [adminTab, setAdminTab] = useState("analysis");
+  const [adminTab, setAdminTab] = useState("picks");
 
   // Persisted state
-  const [apiKey, setApiKey] = useState(() => LS.get("apiKey", ""));
-  const [stocks, setStocks] = useState(() => LS.get("stocks", {}));
+  const [fmpKey, setFmpKey] = useState(() => LS.get("fmpKey", ""));
+  const [stockPicks, setStockPicks] = useState(() => LS.get("stockPicks", []));
   const [myPortfolio, setMyPortfolio] = useState(() => LS.get("myPortfolio", []));
+  const [myCapital, setMyCapital] = useState(() => LS.get("myCapital", 0));
   const [aiHoldings, setAiHoldings] = useState(() => LS.get("aiHoldings", []));
   const [aiTrades, setAiTrades] = useState(() => LS.get("aiTrades", []));
   const [aiCapital, setAiCapital] = useState(() => LS.get("aiCapital", 10000000));
 
   // Transient state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchLoading, setSearchLoading] = useState(false);
   const [marketData, setMarketData] = useState(null);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketLastUpdated, setMarketLastUpdated] = useState(null);
+  const [newsData, setNewsData] = useState([]);
   const [livePrices, setLivePrices] = useState({});
   const [portfolioTab, setPortfolioTab] = useState("holdings");
   const [myPortfolioTab, setMyPortfolioTab] = useState("active");
 
-  // Form state for adding positions
+  // Admin forms
+  const [pickTicker, setPickTicker] = useState("");
+  const [pickName, setPickName] = useState("");
+  const [pickPrice, setPickPrice] = useState("");
+  const [pickSector, setPickSector] = useState("");
+  const [pickScore, setPickScore] = useState(50);
+  const [pickRating, setPickRating] = useState("HOLD");
+  const [pickNotes, setPickNotes] = useState("");
+  const [editingPick, setEditingPick] = useState(null);
+
   const [newTicker, setNewTicker] = useState("");
   const [newShares, setNewShares] = useState("");
   const [newCostBasis, setNewCostBasis] = useState("");
   const [newDate, setNewDate] = useState(new Date().toISOString().split("T")[0]);
-  // Form state for selling
   const [sellIdx, setSellIdx] = useState(null);
   const [sellPrice, setSellPrice] = useState("");
   const [sellDate, setSellDate] = useState(new Date().toISOString().split("T")[0]);
-  // AI trade form
+
   const [aiTicker, setAiTicker] = useState("");
   const [aiShares, setAiShares] = useState("");
   const [aiPrice, setAiPrice] = useState("");
@@ -464,55 +248,69 @@ export default function App() {
 
   useEffect(() => { setMounted(true); }, []);
 
-  // Persist to localStorage
-  useEffect(() => { LS.set("apiKey", apiKey); }, [apiKey]);
-  useEffect(() => { LS.set("stocks", stocks); }, [stocks]);
+  // Persist
+  useEffect(() => { LS.set("fmpKey", fmpKey); }, [fmpKey]);
+  useEffect(() => { LS.set("stockPicks", stockPicks); }, [stockPicks]);
   useEffect(() => { LS.set("myPortfolio", myPortfolio); }, [myPortfolio]);
+  useEffect(() => { LS.set("myCapital", myCapital); }, [myCapital]);
   useEffect(() => { LS.set("aiHoldings", aiHoldings); }, [aiHoldings]);
   useEffect(() => { LS.set("aiTrades", aiTrades); }, [aiTrades]);
   useEffect(() => { LS.set("aiCapital", aiCapital); }, [aiCapital]);
 
   const showNotif = (msg, type = "success") => { setNotification({ msg, type }); setTimeout(() => setNotification(null), 3000); };
 
-  // ── Market Pulse ──
+  // ── Market Pulse: SPY, QQQ, DIA, BTCUSD, GLD ──
+  const MARKET_SYMBOLS = ["SPY", "QQQ", "DIA", "BTCUSD", "GLD"];
+  const MARKET_NAMES = { SPY: "S&P 500", QQQ: "NASDAQ", DIA: "DOW JONES", BTCUSD: "BITCOIN", GLD: "GOLD" };
+  const MARKET_ICONS = { SPY: "\u25B2", QQQ: "\u25C6", DIA: "\u25A0", BTCUSD: "\u20BF", GLD: "\u25C9" };
+
   const refreshMarketData = useCallback(async () => {
-    if (!apiKey) return;
+    if (!fmpKey) return;
     setMarketLoading(true);
     try {
-      const [indices, movers] = await Promise.all([
-        fetchQuotes(["SPY", "DIA", "QQQ", "IWM"], apiKey),
-        fetchMarketMovers(apiKey),
+      const [quotes, news] = await Promise.all([
+        fetchQuotes(MARKET_SYMBOLS, fmpKey),
+        fetchNews(fmpKey, 25),
       ]);
-      setMarketData({
-        indices: (indices || []).map(q => ({ ...q, name: { SPY: "S&P 500 (SPY)", DIA: "Dow Jones (DIA)", QQQ: "NASDAQ-100 (QQQ)", IWM: "Russell 2000 (IWM)" }[q.symbol] || q.symbol })),
-        movers,
-      });
+      if (quotes) {
+        setMarketData(quotes.map(q => ({
+          symbol: q.symbol,
+          name: MARKET_NAMES[q.symbol] || q.symbol,
+          price: q.price,
+          change: q.change,
+          changePct: q.changesPercentage,
+          dayHigh: q.dayHigh,
+          dayLow: q.dayLow,
+          prevClose: q.previousClose,
+          volume: q.volume,
+        })));
+      }
+      if (news) setNewsData(news);
       setMarketLastUpdated(Date.now());
     } catch (e) { console.error(e); }
     setMarketLoading(false);
-  }, [apiKey]);
+  }, [fmpKey]);
 
-  // Auto-refresh market data every 5 min
   useEffect(() => {
-    if (apiKey) refreshMarketData();
-    const interval = setInterval(() => { if (apiKey) refreshMarketData(); }, 300000);
+    if (fmpKey) refreshMarketData();
+    const interval = setInterval(() => { if (fmpKey) refreshMarketData(); }, 300000);
     return () => clearInterval(interval);
-  }, [apiKey, refreshMarketData]);
+  }, [fmpKey, refreshMarketData]);
 
   // ── Live prices for portfolios ──
   const refreshLivePrices = useCallback(async () => {
-    if (!apiKey) return;
+    if (!fmpKey) return;
     const tickers = new Set();
     myPortfolio.filter(p => p.status === "active").forEach(p => tickers.add(p.ticker));
     aiHoldings.forEach(h => tickers.add(h.ticker));
     if (tickers.size === 0) return;
-    const quotes = await fetchQuotes([...tickers], apiKey);
+    const quotes = await fetchQuotes([...tickers], fmpKey);
     if (quotes) {
       const prices = {};
       quotes.forEach(q => { prices[q.symbol] = { price: q.price, change: q.change, changePct: q.changesPercentage }; });
       setLivePrices(prices);
     }
-  }, [apiKey, myPortfolio, aiHoldings]);
+  }, [fmpKey, myPortfolio, aiHoldings]);
 
   useEffect(() => {
     refreshLivePrices();
@@ -520,52 +318,74 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refreshLivePrices]);
 
-  // ── Stock Analysis ──
-  const analyzeStock = async (ticker) => {
-    if (!apiKey || !ticker) return;
-    setSearchLoading(true);
-    const data = await fetchStockAnalysis(ticker.toUpperCase(), apiKey);
-    if (data) {
-      // Preserve published state and remarks if already exists
-      const existing = stocks[data.ticker];
-      if (existing) {
-        data.published = existing.published;
-        data.adminRemarks = existing.adminRemarks;
-      }
-      setStocks(prev => ({ ...prev, [data.ticker]: data }));
-      showNotif(`${data.ticker} analyzed successfully`);
-    } else {
-      showNotif("Ticker not found or API error", "error");
-    }
-    setSearchLoading(false);
+  // ── Admin: fetch price for a ticker ──
+  const fetchTickerPrice = async (ticker) => {
+    if (!fmpKey || !ticker) return;
+    const quotes = await fetchQuotes([ticker.toUpperCase()], fmpKey);
+    if (quotes?.[0]) {
+      setPickPrice(quotes[0].price.toString());
+      if (quotes[0].name) setPickName(quotes[0].name);
+      showNotif(`Price fetched: $${quotes[0].price.toFixed(2)}`);
+    } else { showNotif("Could not fetch price", "error"); }
   };
 
-  const togglePublish = (ticker) => {
-    setStocks(prev => ({ ...prev, [ticker]: { ...prev[ticker], published: !prev[ticker].published } }));
-    showNotif(stocks[ticker]?.published ? `${ticker} removed from Top Picks` : `${ticker} published!`);
+  // ── Stock Picks CRUD ──
+  const addPick = () => {
+    if (!pickTicker) return;
+    const pick = {
+      id: editingPick || Date.now(),
+      ticker: pickTicker.toUpperCase(),
+      name: pickName || pickTicker.toUpperCase(),
+      price: +pickPrice || 0,
+      sector: pickSector,
+      valuationScore: +pickScore,
+      rating: pickRating,
+      notes: pickNotes,
+      published: true,
+      dateAdded: new Date().toISOString().split("T")[0],
+    };
+    if (editingPick) {
+      setStockPicks(prev => prev.map(p => p.id === editingPick ? pick : p));
+      showNotif(`${pick.ticker} updated`);
+    } else {
+      setStockPicks(prev => [pick, ...prev]);
+      showNotif(`${pick.ticker} added to picks`);
+    }
+    clearPickForm();
   };
-  const updateRemarks = (ticker, remarks) => {
-    setStocks(prev => ({ ...prev, [ticker]: { ...prev[ticker], adminRemarks: remarks } }));
-    showNotif("Remarks saved");
+  const clearPickForm = () => { setPickTicker(""); setPickName(""); setPickPrice(""); setPickSector(""); setPickScore(50); setPickRating("HOLD"); setPickNotes(""); setEditingPick(null); };
+  const editPick = (pick) => {
+    setPickTicker(pick.ticker); setPickName(pick.name); setPickPrice(pick.price.toString()); setPickSector(pick.sector);
+    setPickScore(pick.valuationScore); setPickRating(pick.rating); setPickNotes(pick.notes); setEditingPick(pick.id);
   };
+  const togglePickPublish = (id) => { setStockPicks(prev => prev.map(p => p.id === id ? { ...p, published: !p.published } : p)); };
+  const removePick = (id) => { setStockPicks(prev => prev.filter(p => p.id !== id)); showNotif("Pick removed"); };
 
   // ── My Portfolio ──
   const addPosition = () => {
     if (!newTicker || !newShares || !newCostBasis) return;
+    const cost = (+newShares) * (+newCostBasis);
     setMyPortfolio(prev => [...prev, {
       id: Date.now(), ticker: newTicker.toUpperCase(), shares: +newShares,
       costBasis: +newCostBasis, buyDate: newDate, status: "active",
       sellPrice: null, sellDate: null,
     }]);
+    setMyCapital(prev => prev - cost);
     setNewTicker(""); setNewShares(""); setNewCostBasis("");
-    showNotif(`${newTicker.toUpperCase()} position added`);
+    showNotif(`${newTicker.toUpperCase()} added — cash reduced by $${cost.toLocaleString("en", { maximumFractionDigits: 0 })}`);
   };
   const sellPosition = (idx) => {
     if (!sellPrice) return;
+    const pos = myPortfolio[idx];
+    const proceeds = pos.shares * (+sellPrice);
     setMyPortfolio(prev => prev.map((p, i) => i === idx ? { ...p, status: "sold", sellPrice: +sellPrice, sellDate } : p));
-    setSellIdx(null); setSellPrice(""); showNotif("Position closed — realized P&L recorded");
+    setMyCapital(prev => prev + proceeds);
+    setSellIdx(null); setSellPrice("");
+    showNotif(`Sold — $${proceeds.toLocaleString("en", { maximumFractionDigits: 0 })} added to cash`);
   };
   const removePosition = (idx) => {
+    const pos = myPortfolio[idx];
+    if (pos.status === "active") setMyCapital(prev => prev + pos.shares * pos.costBasis);
     setMyPortfolio(prev => prev.filter((_, i) => i !== idx));
     showNotif("Position removed");
   };
@@ -579,22 +399,18 @@ export default function App() {
     if (aiAction === "BUY") {
       setAiCapital(prev => prev - shares * price);
       setAiHoldings(prev => {
-        const existing = prev.find(h => h.ticker === ticker);
-        if (existing) {
-          const totalShares = existing.shares + shares;
-          const avgCost = (existing.shares * existing.costBasis + shares * price) / totalShares;
-          return prev.map(h => h.ticker === ticker ? { ...h, shares: totalShares, costBasis: avgCost } : h);
-        }
-        return [...prev, { ticker, shares, costBasis: price, sector: "—" }];
+        const ex = prev.find(h => h.ticker === ticker);
+        if (ex) { const ts = ex.shares + shares, ac = (ex.shares * ex.costBasis + shares * price) / ts; return prev.map(h => h.ticker === ticker ? { ...h, shares: ts, costBasis: ac } : h); }
+        return [...prev, { ticker, shares, costBasis: price }];
       });
     } else {
       setAiCapital(prev => prev + shares * price);
       setAiHoldings(prev => {
-        const existing = prev.find(h => h.ticker === ticker);
-        if (!existing) return prev;
-        const remaining = existing.shares - shares;
-        if (remaining <= 0) return prev.filter(h => h.ticker !== ticker);
-        return prev.map(h => h.ticker === ticker ? { ...h, shares: remaining } : h);
+        const ex = prev.find(h => h.ticker === ticker);
+        if (!ex) return prev;
+        const rem = ex.shares - shares;
+        if (rem <= 0) return prev.filter(h => h.ticker !== ticker);
+        return prev.map(h => h.ticker === ticker ? { ...h, shares: rem } : h);
       });
     }
     setAiTicker(""); setAiShares(""); setAiPrice("");
@@ -602,42 +418,38 @@ export default function App() {
   };
 
   // ── Computed ──
-  const publishedStocks = Object.values(stocks).filter(s => s.published);
-  const filteredStocks = Object.values(stocks).filter(s =>
-    s.ticker?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const publishedPicks = stockPicks.filter(s => s.published);
   const activePositions = myPortfolio.filter(p => p.status === "active");
   const soldPositions = myPortfolio.filter(p => p.status === "sold");
 
-  // AI Portfolio calcs
-  const aiTotalInvested = aiHoldings.reduce((s, h) => s + h.shares * h.costBasis, 0);
-  const aiTotalMV = aiHoldings.reduce((s, h) => {
-    const lp = livePrices[h.ticker]?.price || h.costBasis;
-    return s + h.shares * lp;
-  }, 0);
+  const myTotalInvested = activePositions.reduce((s, p) => s + p.shares * p.costBasis, 0);
+  const myTotalMV = activePositions.reduce((s, p) => { const lp = livePrices[p.ticker]?.price || p.costBasis; return s + p.shares * lp; }, 0);
+  const myUnrealizedPnL = myTotalMV - myTotalInvested;
+  const myRealizedPnL = soldPositions.reduce((s, p) => s + calcRealizedPnL(p.shares, p.costBasis, p.sellPrice), 0);
+  const myTotalPortfolioValue = myTotalMV + myCapital;
+
+  const aiTotalMV = aiHoldings.reduce((s, h) => { const lp = livePrices[h.ticker]?.price || h.costBasis; return s + h.shares * lp; }, 0);
   const aiPortfolioValue = aiTotalMV + aiCapital;
   const aiTotalReturn = ((aiPortfolioValue - 10000000) / 10000000) * 100;
-
-  // My Portfolio summary
-  const myTotalInvested = activePositions.reduce((s, p) => s + p.shares * p.costBasis, 0);
-  const myTotalMV = activePositions.reduce((s, p) => {
-    const lp = livePrices[p.ticker]?.price || p.costBasis;
-    return s + p.shares * lp;
+  const aiRealizedPnL = aiTrades.filter(t => t.action === "SELL").reduce((s, t) => {
+    const holding = aiTrades.filter(tr => tr.ticker === t.ticker && tr.action === "BUY");
+    const avgCost = holding.length > 0 ? holding.reduce((a, b) => a + b.price, 0) / holding.length : t.price;
+    return s + (t.price - avgCost) * t.shares;
   }, 0);
-  const myTotalUnrealizedPnL = myTotalMV - myTotalInvested;
-  const myTotalRealizedPnL = soldPositions.reduce((s, p) => s + calcRealizedPnL(p.shares, p.costBasis, p.sellPrice), 0);
 
   const navItems = [
     { id: "home", label: "Home" },
     { id: "pulse", label: "Market Pulse" },
-    { id: "picks", label: "Top Stock Picks" },
-    { id: "aiportfolio", label: "AI Portfolio" },
+    { id: "picks", label: "Stock Picks" },
     { id: "myportfolio", label: "My Portfolio" },
+    { id: "aiportfolio", label: "AI Portfolio" },
   ];
 
   const inputStyle = { padding: "8px 12px", borderRadius: 6, border: `1px solid ${T.border}`, background: "rgba(255,255,255,0.03)", color: T.text, fontSize: 12, fontFamily: T.mono, outline: "none", width: "100%" };
-  const btnStyle = (color = T.accent) => ({ padding: "8px 16px", borderRadius: 6, border: "none", background: `${color}15`, color, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: T.mono });
+  const btnStyle = (c = T.accent) => ({ padding: "8px 16px", borderRadius: 6, border: "none", background: `${c}15`, color: c, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: T.mono });
+  const fmt$ = (n) => "$" + (n || 0).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtPct = (n) => (n >= 0 ? "+" : "") + (n || 0).toFixed(2) + "%";
+  const fmtK = (n) => { if (!n) return "$0"; if (Math.abs(n) >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B"; if (Math.abs(n) >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M"; if (Math.abs(n) >= 1e3) return "$" + (n / 1e3).toFixed(0) + "K"; return "$" + n.toLocaleString("en", { maximumFractionDigits: 0 }); };
 
   // ═══════════════════════════════════════════════════
   // RENDER
@@ -645,7 +457,6 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", width: "100vw", background: T.bg, color: T.text, fontFamily: T.sans, position: "relative" }}>
       <Starfield />
-      {/* NOTIFICATION */}
       {notification && <div style={{ position: "fixed", top: 20, right: 20, zIndex: 9999, padding: "12px 20px", borderRadius: 10, background: notification.type === "error" ? `${T.red}20` : `${T.green}20`, border: `1px solid ${notification.type === "error" ? T.red : T.green}30`, color: notification.type === "error" ? T.red : T.green, fontSize: 12, fontWeight: 600, fontFamily: T.mono, animation: "slideIn 0.3s ease" }}>{notification.msg}</div>}
 
       {/* NAV */}
@@ -673,10 +484,10 @@ export default function App() {
               <button onClick={() => setShowAdminLogin(!showAdminLogin)} style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>Admin</button>
               {showAdminLogin && (
                 <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, padding: 12, borderRadius: 8, background: "#0a0a10", border: `1px solid ${T.border}`, display: "flex", gap: 6, zIndex: 100 }}>
-                  <input type="password" value={adminPass} onChange={e => setAdminPass(e.target.value)}  onKeyDown={e => { if (e.key === "Enter") { if (adminPass === "RVNCP24!") { setIsAdmin(true); setShowAdminLogin(false); setAdminPass(""); showNotif("Admin access granted"); setPage("admin"); } else { showNotif("Wrong password", "error"); } } }}
+                  <input type="password" value={adminPass} onChange={e => setAdminPass(e.target.value)} placeholder="Password" onKeyDown={e => { if (e.key === "Enter") { if (adminPass === "RVNCP24!") { setIsAdmin(true); setShowAdminLogin(false); setAdminPass(""); showNotif("Admin access granted"); setPage("admin"); } else showNotif("Wrong password", "error"); } }}
                     style={{ ...inputStyle, width: 120 }} />
-                  <button onClick={() => { if (adminPass === "RVNCP24!") { setIsAdmin(true); setShowAdminLogin(false); setAdminPass(""); showNotif("Admin access granted"); setPage("admin"); } else { showNotif("Wrong password", "error"); } }}
-                    style={btnStyle(T.accent)}>→</button>
+                  <button onClick={() => { if (adminPass === "RVNCP24!") { setIsAdmin(true); setShowAdminLogin(false); setAdminPass(""); showNotif("Admin access granted"); setPage("admin"); } else showNotif("Wrong password", "error"); }}
+                    style={btnStyle(T.accent)}>\u2192</button>
                 </div>
               )}
             </div>
@@ -684,7 +495,6 @@ export default function App() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT */}
       <div style={{ position: "relative", zIndex: 1, maxWidth: 1200, margin: "0 auto", padding: "32px 32px 80px" }}>
 
         {/* ══════ HOME ══════ */}
@@ -692,20 +502,18 @@ export default function App() {
           <div style={{ animation: mounted ? "slideIn 0.5s ease" : "none" }}>
             <div style={{ textAlign: "center", padding: "60px 0 50px" }}>
               <ShipLogo size={64} />
-              <h1 style={{ fontSize: 48, fontWeight: 900, letterSpacing: "-0.03em", marginTop: 16, marginBottom: 12 }}>
-                ryzn<span style={{ fontWeight: 400, color: T.textDim }}>.io</span>
-              </h1>
+              <h1 style={{ fontSize: 48, fontWeight: 900, letterSpacing: "-0.03em", marginTop: 16, marginBottom: 12 }}>ryzn<span style={{ fontWeight: 400, color: T.textDim }}>.io</span></h1>
               <p style={{ fontSize: 15, color: T.textDim, maxWidth: 520, margin: "0 auto", lineHeight: 1.8 }}>
-                AI-powered stock analysis platform with institutional-grade valuation models, live market data, and portfolio management.
+                AI-powered stock analysis platform with live market data, curated stock picks, and portfolio management.
               </p>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 40 }}>
               {[
-                { title: "DCF Analysis", desc: "Bear, base & bull scenarios using institutional-grade methods — perpetuity growth and exit multiple approaches.", icon: "◎" },
-                { title: "Relative Valuation", desc: "Compare valuation metrics and ratios against historical and industry averages to identify mispricings.", icon: "◈" },
-                { title: "Market Pulse", desc: "Real-time market data, top movers, and sentiment analysis powered by live API feeds.", icon: "◉" },
+                { title: "Market Pulse", desc: "Live S&P 500, NASDAQ, Dow, Bitcoin, and Gold data with breaking market news.", icon: "\u25C9", page: "pulse" },
+                { title: "Stock Picks", desc: "Curated stock picks with valuation analysis and detailed notes on each position.", icon: "\u25C8", page: "picks" },
+                { title: "Portfolio Tracker", desc: "Track both personal and AI-managed portfolios with live P&L and realized gains.", icon: "\u25CE", page: "myportfolio" },
               ].map(f => (
-                <div key={f.title} style={{ padding: 28, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, transition: "border-color 0.3s" }}
+                <div key={f.title} onClick={() => setPage(f.page)} style={{ padding: 28, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, cursor: "pointer", transition: "border-color 0.3s" }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = T.borderHover} onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
                   <div style={{ fontSize: 24, marginBottom: 14, opacity: 0.4 }}>{f.icon}</div>
                   <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{f.title}</div>
@@ -713,14 +521,14 @@ export default function App() {
                 </div>
               ))}
             </div>
-            {publishedStocks.length > 0 && (
+            {publishedPicks.length > 0 && (
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                   <h2 style={{ fontSize: 18, fontWeight: 800 }}>Featured Picks</h2>
-                  <button onClick={() => setPage("picks")} style={{ ...btnStyle(), fontSize: 10 }}>View All →</button>
+                  <button onClick={() => setPage("picks")} style={{ ...btnStyle(), fontSize: 10 }}>View All \u2192</button>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-                  {publishedStocks.slice(0, 3).map(s => <StockCard key={s.ticker} stock={s} onClick={() => setSelectedStock(s)} />)}
+                  {publishedPicks.slice(0, 3).map(s => <StockCard key={s.id} stock={s} onClick={() => setSelectedStock(s)} />)}
                 </div>
               </div>
             )}
@@ -729,140 +537,85 @@ export default function App() {
 
         {/* ══════ MARKET PULSE ══════ */}
         {page === "pulse" && (
-          <MarketPulse marketData={marketData} loading={marketLoading} onRefresh={refreshMarketData} lastUpdated={marketLastUpdated} />
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+              <div><h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>Market Pulse</h1>
+                <p style={{ fontSize: 13, color: T.textDim }}>Live market data \u00B7 Auto-refreshes every 5 minutes</p></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {marketLastUpdated && <span style={{ fontSize: 10, color: T.textDim, fontFamily: T.mono }}>Updated {new Date(marketLastUpdated).toLocaleTimeString()}</span>}
+                <button onClick={refreshMarketData} disabled={marketLoading} style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${T.border}`, background: marketLoading ? "rgba(255,255,255,0.02)" : "transparent", color: marketLoading ? T.textDim : T.accent, fontSize: 11, fontWeight: 600, cursor: marketLoading ? "wait" : "pointer", fontFamily: T.mono }}>
+                  {marketLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+            </div>
+            {!fmpKey && <div style={{ padding: 16, borderRadius: 10, background: `${T.amber}08`, border: `1px solid ${T.amber}20`, marginBottom: 20, fontSize: 12, color: T.amber }}>Set your FMP API key in Admin \u2192 Settings to enable live data.</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 20 }}>
+              {/* Left: Market Cards */}
+              <div>
+                {marketData ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                    {marketData.map(m => (
+                      <div key={m.symbol} style={{ padding: 22, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em" }}>{MARKET_ICONS[m.symbol] || ""} {m.name}</div>
+                          <span style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>{m.symbol}</span>
+                        </div>
+                        <div style={{ fontSize: 26, fontWeight: 800, fontFamily: T.mono, marginBottom: 6 }}>{fmt$(m.price)}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: m.changePct >= 0 ? T.green : T.red, fontFamily: T.mono }}>
+                            {m.change >= 0 ? "+" : ""}{(m.change || 0).toFixed(2)} ({fmtPct(m.changePct)})
+                          </span>
+                        </div>
+                        {m.dayHigh && <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10, color: T.textDim, fontFamily: T.mono }}>
+                          <span>H: {fmt$(m.dayHigh)}</span><span>L: {fmt$(m.dayLow)}</span>
+                        </div>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ padding: 60, textAlign: "center", color: T.textDim }}>
+                    {marketLoading ? "Loading market data..." : "No data available. Add API key in Admin \u2192 Settings."}
+                  </div>
+                )}
+              </div>
+              {/* Right: News Panel */}
+              <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden", maxHeight: "calc(100vh - 200px)" }}>
+                <div style={{ padding: "16px 18px", borderBottom: `1px solid ${T.border}`, position: "sticky", top: 0, background: "rgba(10,10,16,0.95)", zIndex: 1 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, fontFamily: T.mono, letterSpacing: "0.12em" }}>MARKET NEWS</div>
+                </div>
+                <div style={{ overflow: "auto", maxHeight: "calc(100vh - 260px)", padding: "0 2px" }}>
+                  {newsData.length > 0 ? newsData.map((n, i) => (
+                    <a key={i} href={n.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", padding: "12px 16px", borderBottom: `1px solid rgba(255,255,255,0.03)`, textDecoration: "none", color: T.text, transition: "background 0.15s" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.5, marginBottom: 6 }}>{n.title}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>{n.site}</span>
+                        <span style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>{n.publishedDate?.split(" ")[0]}</span>
+                      </div>
+                      {n.symbol && <span style={{ fontSize: 8, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: `${T.cyan}10`, color: T.cyan, fontFamily: T.mono, marginTop: 4, display: "inline-block" }}>{n.symbol}</span>}
+                    </a>
+                  )) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 11 }}>{fmpKey ? "Loading news..." : "Set API key for news"}</div>}
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
-        {/* ══════ TOP STOCK PICKS ══════ */}
+        {/* ══════ STOCK PICKS ══════ */}
         {page === "picks" && (
           <div>
             <div style={{ marginBottom: 28 }}>
-              <h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>Top Stock Picks</h1>
-              <p style={{ fontSize: 13, color: T.textDim }}>Curated analysis powered by institutional-grade valuation models.</p>
+              <h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>Stock Picks</h1>
+              <p style={{ fontSize: 13, color: T.textDim }}>Curated stock picks with valuation analysis and detailed notes.</p>
             </div>
-            {publishedStocks.length > 0 ? (
+            {publishedPicks.length > 0 ? (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-                {publishedStocks.map(s => <StockCard key={s.ticker} stock={s} onClick={() => setSelectedStock(s)} />)}
+                {publishedPicks.map(s => <StockCard key={s.id} stock={s} onClick={() => setSelectedStock(s)} />)}
               </div>
             ) : (
               <div style={{ textAlign: "center", padding: 60, color: T.textDim }}>
                 <div style={{ fontSize: 14 }}>No published picks yet.</div>
-                <div style={{ fontSize: 12, marginTop: 8 }}>Admin can analyze tickers and publish them from the Admin dashboard.</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ══════ AI PORTFOLIO ══════ */}
-        {page === "aiportfolio" && (
-          <div>
-            <div style={{ marginBottom: 28 }}>
-              <h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>AI Portfolio</h1>
-              <p style={{ fontSize: 13, color: T.textDim }}>$10M simulated portfolio managed with AI-driven conviction.</p>
-            </div>
-            {/* Summary Cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
-              {[
-                { label: "Portfolio Value", value: "$" + aiPortfolioValue.toLocaleString("en", { maximumFractionDigits: 0 }), color: T.text },
-                { label: "Cash Balance", value: "$" + aiCapital.toLocaleString("en", { maximumFractionDigits: 0 }), color: T.cyan },
-                { label: "Invested", value: "$" + aiTotalMV.toLocaleString("en", { maximumFractionDigits: 0 }), color: T.accent },
-                { label: "Total Return", value: (aiTotalReturn >= 0 ? "+" : "") + aiTotalReturn.toFixed(2) + "%", color: aiTotalReturn >= 0 ? T.green : T.red },
-              ].map(c => (
-                <div key={c.label} style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 8 }}>{c.label}</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.mono, color: c.color }}>{c.value}</div>
-                </div>
-              ))}
-            </div>
-            {/* Tabs */}
-            <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
-              {["holdings", "trades", "strategy"].map(t => (
-                <button key={t} onClick={() => setPortfolioTab(t)}
-                  style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: portfolioTab === t ? T.accentSubtle : "transparent", color: portfolioTab === t ? T.accent : T.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.mono, textTransform: "capitalize" }}>{t}</button>
-              ))}
-            </div>
-            {portfolioTab === "holdings" && (
-              <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
-                {aiHoldings.length > 0 ? (
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <TH cols={["Ticker", "Shares", "Cost Basis", "Price", "Mkt Value", "P&L", "Return"]} />
-                    <tbody>
-                      {aiHoldings.map(h => {
-                        const lp = livePrices[h.ticker]?.price || h.costBasis;
-                        const mv = h.shares * lp, cost = h.shares * h.costBasis, pnl = mv - cost, ret = (pnl / cost) * 100;
-                        return (
-                          <tr key={h.ticker} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
-                            <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{h.ticker}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{h.shares}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${h.costBasis.toFixed(2)}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${lp.toFixed(2)}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${mv.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
-                            <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No AI holdings yet. Add trades from Admin → AI Portfolio.</div>}
-              </div>
-            )}
-            {portfolioTab === "trades" && (
-              <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
-                {aiTrades.length > 0 ? (
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <TH cols={["Date", "Ticker", "Action", "Shares", "Price", "Total"]} />
-                    <tbody>
-                      {aiTrades.map((t, i) => (
-                        <tr key={i} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
-                          <td style={{ padding: "12px 16px", fontSize: 11, color: T.textDim, fontFamily: T.mono }}>{t.date}</td>
-                          <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{t.ticker}</td>
-                          <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: t.action === "BUY" ? `${T.green}10` : `${T.red}10`, color: t.action === "BUY" ? T.green : T.red, fontFamily: T.mono }}>{t.action}</span></td>
-                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{t.shares}</td>
-                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${t.price.toFixed(2)}</td>
-                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: t.action === "BUY" ? T.amber : T.cyan }}>{t.action === "BUY" ? "-" : "+"}${(t.shares * t.price).toLocaleString("en", { maximumFractionDigits: 0 })}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No trades executed yet.</div>}
-              </div>
-            )}
-            {portfolioTab === "strategy" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                <div style={{ padding: 24, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
-                  <h3 style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", marginBottom: 18, fontFamily: T.mono, letterSpacing: "0.14em", textTransform: "uppercase" }}>Capital Allocation</h3>
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, color: T.textMuted }}>Invested</span>
-                      <span style={{ fontSize: 11, fontFamily: T.mono, color: T.accent }}>{((aiTotalMV / aiPortfolioValue) * 100).toFixed(1)}%</span>
-                    </div>
-                    <div style={{ height: 6, background: "rgba(255,255,255,0.03)", borderRadius: 3, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${(aiTotalMV / aiPortfolioValue) * 100}%`, background: T.accent, opacity: 0.5, borderRadius: 3 }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, color: T.textMuted }}>Cash</span>
-                      <span style={{ fontSize: 11, fontFamily: T.mono, color: T.cyan }}>{((aiCapital / aiPortfolioValue) * 100).toFixed(1)}%</span>
-                    </div>
-                    <div style={{ height: 6, background: "rgba(255,255,255,0.03)", borderRadius: 3, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${(aiCapital / aiPortfolioValue) * 100}%`, background: T.cyan, opacity: 0.5, borderRadius: 3 }} />
-                    </div>
-                  </div>
-                </div>
-                <div style={{ padding: 24, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
-                  <h3 style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", marginBottom: 18, fontFamily: T.mono, letterSpacing: "0.14em", textTransform: "uppercase" }}>Strategy</h3>
-                  {[
-                    { l: "APPROACH", c: T.green, t: "Growth-oriented with value discipline. $10M capital deployed across high-conviction positions with significant cash reserve." },
-                    { l: "THESIS", c: T.cyan, t: "Overweight tech on AI secular trend. Financials for rate environment. Healthcare as defensive." },
-                    { l: "RISK", c: T.amber, t: "Max 30% single sector. Position sizing by conviction. Stop-loss at -15%. Cash reserve maintained." },
-                  ].map(s => (
-                    <div key={s.l} style={{ marginBottom: 14 }}>
-                      <div style={{ color: s.c, fontWeight: 700, fontSize: 9, fontFamily: T.mono, letterSpacing: "0.14em", marginBottom: 3 }}>{s.l}</div>
-                      <div style={{ fontSize: 11, color: T.textDim, lineHeight: 1.7 }}>{s.t}</div>
-                    </div>
-                  ))}
-                </div>
+                <div style={{ fontSize: 12, marginTop: 8 }}>Admin can create and publish stock picks from the Admin dashboard.</div>
               </div>
             )}
           </div>
@@ -875,21 +628,20 @@ export default function App() {
               <h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>My Portfolio</h1>
               <p style={{ fontSize: 13, color: T.textDim }}>Personal investment tracker with live prices.</p>
             </div>
-            {/* Summary */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14, marginBottom: 24 }}>
               {[
-                { label: "Total Invested", value: "$" + myTotalInvested.toLocaleString("en", { maximumFractionDigits: 0 }), color: T.text },
-                { label: "Market Value", value: "$" + myTotalMV.toLocaleString("en", { maximumFractionDigits: 0 }), color: T.accent },
-                { label: "Unrealized P&L", value: (myTotalUnrealizedPnL >= 0 ? "+" : "") + "$" + myTotalUnrealizedPnL.toLocaleString("en", { maximumFractionDigits: 0 }), color: myTotalUnrealizedPnL >= 0 ? T.green : T.red },
-                { label: "Realized P&L", value: (myTotalRealizedPnL >= 0 ? "+" : "") + "$" + myTotalRealizedPnL.toLocaleString("en", { maximumFractionDigits: 0 }), color: myTotalRealizedPnL >= 0 ? T.green : T.red },
+                { label: "Portfolio Value", value: fmtK(myTotalPortfolioValue), color: T.text },
+                { label: "Cash", value: fmtK(myCapital), color: T.cyan },
+                { label: "Market Value", value: fmtK(myTotalMV), color: T.accent },
+                { label: "Unrealized P&L", value: (myUnrealizedPnL >= 0 ? "+" : "") + fmtK(myUnrealizedPnL), color: myUnrealizedPnL >= 0 ? T.green : T.red },
+                { label: "Realized P&L", value: (myRealizedPnL >= 0 ? "+" : "") + fmtK(myRealizedPnL), color: myRealizedPnL >= 0 ? T.green : T.red },
               ].map(c => (
-                <div key={c.label} style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 8 }}>{c.label}</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.mono, color: c.color }}>{c.value}</div>
+                <div key={c.label} style={{ padding: 18, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 8 }}>{c.label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, fontFamily: T.mono, color: c.color }}>{c.value}</div>
                 </div>
               ))}
             </div>
-            {/* Tabs */}
             <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
               {["active", "sold"].map(t => (
                 <button key={t} onClick={() => setMyPortfolioTab(t)}
@@ -898,61 +650,120 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {/* Active Positions */}
             {myPortfolioTab === "active" && (
               <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
                 {activePositions.length > 0 ? (
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <TH cols={["Ticker", "Shares", "Cost Basis", "Current Price", "Unrealized P&L", "Return", "Date"]} />
-                    <tbody>
-                      {activePositions.map((p, idx) => {
-                        const realIdx = myPortfolio.indexOf(p);
-                        const lp = livePrices[p.ticker]?.price || p.costBasis;
-                        const pnl = calcUnrealizedPnL(p.shares, p.costBasis, lp);
-                        const ret = calcUnrealizedReturn(p.costBasis, lp);
-                        return (
-                          <tr key={p.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
-                            <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{p.ticker}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{p.shares}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${p.costBasis.toFixed(2)}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${lp.toFixed(2)}{livePrices[p.ticker] && <span style={{ fontSize: 9, marginLeft: 4, color: T.green }}>●</span>}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
-                            <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
-                            <td style={{ padding: "12px 16px", fontSize: 10, color: T.textDim, fontFamily: T.mono }}>{p.buyDate}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
+                    <TH cols={["Ticker", "Shares", "Cost Basis", "Price", "Unrealized P&L", "Return", "Date"]} />
+                    <tbody>{activePositions.map(p => {
+                      const lp = livePrices[p.ticker]?.price || p.costBasis;
+                      const pnl = calcUnrealizedPnL(p.shares, p.costBasis, lp);
+                      const ret = calcUnrealizedReturn(p.costBasis, lp);
+                      return (<tr key={p.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
+                        <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{p.ticker}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{p.shares}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${p.costBasis.toFixed(2)}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${lp.toFixed(2)}{livePrices[p.ticker] && <span style={{ fontSize: 9, marginLeft: 4, color: T.green }}>\u25CF</span>}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
+                        <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
+                        <td style={{ padding: "12px 16px", fontSize: 10, color: T.textDim, fontFamily: T.mono }}>{p.buyDate}</td>
+                      </tr>);
+                    })}</tbody>
                   </table>
-                ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No active positions. Add positions from Admin → My Portfolio.</div>}
+                ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No active positions. Add from Admin \u2192 My Portfolio.</div>}
               </div>
             )}
-            {/* Sold Positions */}
             {myPortfolioTab === "sold" && (
               <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
                 {soldPositions.length > 0 ? (
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <TH cols={["Ticker", "Status", "Shares", "Cost Basis", "Sell Price", "Realized P&L", "Return", "Sold"]} />
-                    <tbody>
-                      {soldPositions.map(p => {
-                        const pnl = calcRealizedPnL(p.shares, p.costBasis, p.sellPrice);
-                        const ret = calcRealizedReturn(p.costBasis, p.sellPrice);
-                        return (
-                          <tr key={p.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
-                            <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{p.ticker}</td>
-                            <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: `${T.red}10`, color: T.red, fontFamily: T.mono, letterSpacing: "0.08em" }}>SOLD</span></td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{p.shares}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${p.costBasis.toFixed(2)}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${p.sellPrice.toFixed(2)}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
-                            <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
-                            <td style={{ padding: "12px 16px", fontSize: 10, color: T.textDim, fontFamily: T.mono }}>{p.sellDate}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
+                    <tbody>{soldPositions.map(p => {
+                      const pnl = calcRealizedPnL(p.shares, p.costBasis, p.sellPrice);
+                      const ret = calcRealizedReturn(p.costBasis, p.sellPrice);
+                      return (<tr key={p.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
+                        <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{p.ticker}</td>
+                        <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: `${T.red}10`, color: T.red, fontFamily: T.mono }}>SOLD</span></td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{p.shares}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${p.costBasis.toFixed(2)}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${p.sellPrice.toFixed(2)}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
+                        <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
+                        <td style={{ padding: "12px 16px", fontSize: 10, color: T.textDim, fontFamily: T.mono }}>{p.sellDate}</td>
+                      </tr>);
+                    })}</tbody>
                   </table>
                 ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No sold positions yet.</div>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══════ AI PORTFOLIO ══════ */}
+        {page === "aiportfolio" && (
+          <div>
+            <div style={{ marginBottom: 28 }}>
+              <h1 style={{ fontSize: 30, fontWeight: 800, marginBottom: 6 }}>AI Portfolio</h1>
+              <p style={{ fontSize: 13, color: T.textDim }}>$10M simulated portfolio managed with AI-driven conviction.</p>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
+              {[
+                { label: "Portfolio Value", value: fmtK(aiPortfolioValue), color: T.text },
+                { label: "Cash", value: fmtK(aiCapital), color: T.cyan },
+                { label: "Invested", value: fmtK(aiTotalMV), color: T.accent },
+                { label: "Total Return", value: fmtPct(aiTotalReturn), color: aiTotalReturn >= 0 ? T.green : T.red },
+              ].map(c => (
+                <div key={c.label} style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 8 }}>{c.label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.mono, color: c.color }}>{c.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
+              {["holdings", "trades"].map(t => (
+                <button key={t} onClick={() => setPortfolioTab(t)}
+                  style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: portfolioTab === t ? T.accentSubtle : "transparent", color: portfolioTab === t ? T.accent : T.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.mono, textTransform: "capitalize" }}>{t}</button>
+              ))}
+            </div>
+            {portfolioTab === "holdings" && (
+              <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
+                {aiHoldings.length > 0 ? (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <TH cols={["Ticker", "Shares", "Cost Basis", "Price", "Mkt Value", "P&L", "Return"]} />
+                    <tbody>{aiHoldings.map(h => {
+                      const lp = livePrices[h.ticker]?.price || h.costBasis;
+                      const mv = h.shares * lp, cost = h.shares * h.costBasis, pnl = mv - cost, ret = cost > 0 ? (pnl / cost) * 100 : 0;
+                      return (<tr key={h.ticker} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
+                        <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{h.ticker}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{h.shares}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${h.costBasis.toFixed(2)}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${lp.toFixed(2)}{livePrices[h.ticker] && <span style={{ fontSize: 9, marginLeft: 4, color: T.green }}>\u25CF</span>}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{fmtK(mv)}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}{fmtK(pnl)}</td>
+                        <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
+                      </tr>);
+                    })}</tbody>
+                  </table>
+                ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No AI holdings. Add trades from Admin \u2192 AI Portfolio.</div>}
+              </div>
+            )}
+            {portfolioTab === "trades" && (
+              <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
+                {aiTrades.length > 0 ? (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <TH cols={["Date", "Ticker", "Action", "Shares", "Price", "Total"]} />
+                    <tbody>{aiTrades.map((t, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
+                        <td style={{ padding: "12px 16px", fontSize: 11, color: T.textDim, fontFamily: T.mono }}>{t.date}</td>
+                        <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{t.ticker}</td>
+                        <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: t.action === "BUY" ? `${T.green}10` : `${T.red}10`, color: t.action === "BUY" ? T.green : T.red, fontFamily: T.mono }}>{t.action}</span></td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{t.shares}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${t.price.toFixed(2)}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: t.action === "BUY" ? T.amber : T.cyan }}>{t.action === "BUY" ? "-" : "+"}{fmtK(t.shares * t.price)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                ) : <div style={{ padding: 40, textAlign: "center", color: T.textDim, fontSize: 13 }}>No trades yet.</div>}
               </div>
             )}
           </div>
@@ -967,77 +778,111 @@ export default function App() {
                 <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", background: "rgba(251,191,36,0.08)", color: T.amber, borderRadius: 4, fontFamily: T.mono }}>RESTRICTED</span>
               </div>
             </div>
-            {/* Admin Tabs */}
             <div style={{ display: "flex", gap: 4, marginBottom: 24 }}>
-              {[
-                { id: "analysis", label: "Stock Analysis" },
-                { id: "myportmgmt", label: "My Portfolio" },
-                { id: "aimgmt", label: "AI Portfolio" },
-                { id: "settings", label: "Settings" },
-              ].map(t => (
+              {[{ id: "picks", label: "Stock Picks" }, { id: "myportmgmt", label: "My Portfolio" }, { id: "aimgmt", label: "AI Portfolio" }, { id: "settings", label: "Settings" }].map(t => (
                 <button key={t.id} onClick={() => setAdminTab(t.id)}
                   style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: adminTab === t.id ? `${T.amber}08` : "transparent", color: adminTab === t.id ? T.amber : T.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>{t.label}</button>
               ))}
             </div>
 
-            {/* ── Stock Analysis ── */}
-            {adminTab === "analysis" && (
+            {/* ── Admin: Stock Picks ── */}
+            {adminTab === "picks" && (
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}`, marginBottom: 24 }}>
-                  <span style={{ color: T.textMuted, fontSize: 15 }}>⌕</span>
-                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" && searchQuery) analyzeStock(searchQuery); }}
-                    placeholder="Enter ticker to analyze (e.g. AAPL, TSLA, MSFT)..."
-                    style={{ flex: 1, padding: 0, border: "none", background: "transparent", color: T.text, fontSize: 14, outline: "none", fontFamily: T.mono }} />
-                  <button onClick={() => analyzeStock(searchQuery)} disabled={searchLoading || !searchQuery}
-                    style={{ ...btnStyle(T.green), opacity: searchLoading || !searchQuery ? 0.5 : 1 }}>
-                    {searchLoading ? "Analyzing..." : "Analyze"}
-                  </button>
+                <div style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, marginBottom: 24 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>{editingPick ? "EDIT PICK" : "ADD NEW PICK"}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+                    <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>TICKER</div>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <input value={pickTicker} onChange={e => setPickTicker(e.target.value)} placeholder="AAPL" style={inputStyle} />
+                        {fmpKey && <button onClick={() => fetchTickerPrice(pickTicker)} style={{ ...btnStyle(T.cyan), padding: "6px 10px", fontSize: 9, whiteSpace: "nowrap" }}>Fetch</button>}
+                      </div>
+                    </div>
+                    <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>COMPANY NAME</div><input value={pickName} onChange={e => setPickName(e.target.value)} placeholder="Apple Inc." style={inputStyle} /></div>
+                    <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>PRICE ($)</div><input type="number" step="0.01" value={pickPrice} onChange={e => setPickPrice(e.target.value)} placeholder="150.00" style={inputStyle} /></div>
+                    <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>SECTOR</div><input value={pickSector} onChange={e => setPickSector(e.target.value)} placeholder="Technology" style={inputStyle} /></div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>VALUE SCORE: <span style={{ color: pickScore >= 66 ? T.green : pickScore >= 33 ? T.amber : T.red, fontWeight: 700 }}>{pickScore}</span> ({pickScore >= 66 ? "Undervalued" : pickScore >= 33 ? "Fair Value" : "Overvalued"})</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 9, color: T.red, fontFamily: T.mono }}>0</span>
+                        <input type="range" min="0" max="100" value={pickScore} onChange={e => setPickScore(+e.target.value)}
+                          style={{ flex: 1, height: 4, appearance: "none", background: `linear-gradient(to right, ${T.red}, ${T.amber}, ${T.green})`, borderRadius: 2, outline: "none", cursor: "pointer" }} />
+                        <span style={{ fontSize: 9, color: T.green, fontFamily: T.mono }}>100</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>RATING</div>
+                      <select value={pickRating} onChange={e => setPickRating(e.target.value)} style={inputStyle}>
+                        <option value="BUY">BUY</option><option value="HOLD">HOLD</option><option value="SELL">SELL</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>ANALYSIS NOTES</div>
+                    <textarea value={pickNotes} onChange={e => setPickNotes(e.target.value)} rows={3} placeholder="Your analysis, thesis, catalysts, risks..."
+                      style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={addPick} style={btnStyle(T.green)}>{editingPick ? "Update Pick" : "Add & Publish"}</button>
+                    {editingPick && <button onClick={clearPickForm} style={btnStyle(T.textDim)}>Cancel</button>}
+                  </div>
                 </div>
-                {!apiKey && <div style={{ padding: 16, borderRadius: 10, background: `${T.amber}08`, border: `1px solid ${T.amber}20`, marginBottom: 20, fontSize: 12, color: T.amber }}>⚠ Set your FMP API key in Settings to enable live analysis.</div>}
-                {Object.keys(stocks).length > 0 && (
+                {stockPicks.length > 0 && (
                   <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <TH cols={["Ticker", "Name", "Price", "Value", "Sentiment", "Overall", "Status", "Actions"]} />
-                      <tbody>
-                        {filteredStocks.map(s => (
-                          <tr key={s.ticker} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}
-                            onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.015)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                            <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{s.ticker}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, color: T.textMuted }}>{s.name}</td>
-                            <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${s.price?.toFixed(2)} <span style={{ fontSize: 10, color: s.changePct >= 0 ? T.green : T.red }}>{s.changePct >= 0 ? "+" : ""}{s.changePct?.toFixed(2)}%</span></td>
-                            <td style={{ padding: "12px 16px" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <div style={{ width: 40, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}><div style={{ height: "100%", width: `${s.valuationScore}%`, background: s.valuationScore >= 66 ? T.green : s.valuationScore >= 33 ? T.amber : T.red, borderRadius: 2 }} /></div>
-                                <span style={{ fontSize: 10, fontFamily: T.mono, color: T.textDim }}>{s.valuationScore}</span>
-                              </div>
-                            </td>
-                            <td style={{ padding: "12px 16px" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <div style={{ width: 40, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}><div style={{ height: "100%", width: `${s.sentimentScore}%`, background: s.sentimentScore >= 66 ? T.green : s.sentimentScore >= 33 ? T.amber : T.red, borderRadius: 2 }} /></div>
-                                <span style={{ fontSize: 10, fontFamily: T.mono, color: T.textDim }}>{s.sentimentScore}</span>
-                              </div>
-                            </td>
-                            <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: s.overallScore >= 66 ? `${T.green}10` : s.overallScore >= 33 ? `${T.amber}10` : `${T.red}10`, color: s.overallScore >= 66 ? T.green : s.overallScore >= 33 ? T.amber : T.red, fontFamily: T.mono }}>{s.overallScore >= 66 ? "BUY" : s.overallScore >= 33 ? "HOLD" : "SELL"}</span></td>
-                            <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: s.published ? `${T.green}08` : "rgba(255,255,255,0.03)", color: s.published ? T.green : T.textDim, fontFamily: T.mono }}>{s.published ? "LIVE" : "DRAFT"}</span></td>
-                            <td style={{ padding: "12px 16px" }}>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <button onClick={() => setSelectedStock(s)} style={{ padding: "5px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer", fontFamily: T.mono }}>View</button>
-                                <button onClick={() => togglePublish(s.ticker)} style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: s.published ? `${T.red}08` : `${T.green}08`, color: s.published ? T.red : T.green, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>{s.published ? "Unpublish" : "Publish"}</button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
+                      <TH cols={["Ticker", "Name", "Price", "Score", "Rating", "Status", "Actions"]} />
+                      <tbody>{stockPicks.map(s => (
+                        <tr key={s.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}
+                          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.015)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                          <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{s.ticker}</td>
+                          <td style={{ padding: "12px 16px", fontSize: 12, color: T.textMuted }}>{s.name}</td>
+                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${s.price?.toFixed(2)}</td>
+                          <td style={{ padding: "12px 16px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ width: 40, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}><div style={{ height: "100%", width: `${s.valuationScore}%`, background: s.valuationScore >= 66 ? T.green : s.valuationScore >= 33 ? T.amber : T.red, borderRadius: 2 }} /></div>
+                              <span style={{ fontSize: 10, fontFamily: T.mono, color: T.textDim }}>{s.valuationScore}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: (s.rating === "BUY" ? T.green : s.rating === "HOLD" ? T.amber : T.red) + "10", color: s.rating === "BUY" ? T.green : s.rating === "HOLD" ? T.amber : T.red, fontFamily: T.mono }}>{s.rating}</span></td>
+                          <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: s.published ? `${T.green}08` : "rgba(255,255,255,0.03)", color: s.published ? T.green : T.textDim, fontFamily: T.mono }}>{s.published ? "LIVE" : "DRAFT"}</span></td>
+                          <td style={{ padding: "12px 16px" }}>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button onClick={() => editPick(s)} style={{ padding: "5px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer", fontFamily: T.mono }}>Edit</button>
+                              <button onClick={() => togglePickPublish(s.id)} style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: s.published ? `${T.red}08` : `${T.green}08`, color: s.published ? T.red : T.green, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>{s.published ? "Unpublish" : "Publish"}</button>
+                              <button onClick={() => removePick(s.id)} style={{ padding: "5px 8px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer", fontFamily: T.mono }}>\u2715</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}</tbody>
                     </table>
                   </div>
                 )}
               </div>
             )}
 
-            {/* ── My Portfolio Management ── */}
+            {/* ── Admin: My Portfolio ── */}
             {adminTab === "myportmgmt" && (
               <div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
+                  <div style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 10 }}>CASH BALANCE</div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 22, fontWeight: 800, fontFamily: T.mono, color: T.cyan }}>{fmtK(myCapital)}</span>
+                      <input type="number" step="0.01" value={myCapital || ""} onChange={e => setMyCapital(+e.target.value)}
+                        style={{ ...inputStyle, width: 140 }} placeholder="Set cash..." />
+                    </div>
+                    <div style={{ fontSize: 9, color: T.textDim, marginTop: 6 }}>Buys subtract from cash. Sells add to cash.</div>
+                  </div>
+                  <div style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 10 }}>SUMMARY</div>
+                    <div style={{ fontSize: 12, color: T.textMuted, lineHeight: 2 }}>
+                      Portfolio Value: <span style={{ color: T.text, fontWeight: 700, fontFamily: T.mono }}>{fmtK(myTotalPortfolioValue)}</span><br/>
+                      Unrealized: <span style={{ color: myUnrealizedPnL >= 0 ? T.green : T.red, fontWeight: 700, fontFamily: T.mono }}>{myUnrealizedPnL >= 0 ? "+" : ""}{fmtK(myUnrealizedPnL)}</span><br/>
+                      Realized: <span style={{ color: myRealizedPnL >= 0 ? T.green : T.red, fontWeight: 700, fontFamily: T.mono }}>{myRealizedPnL >= 0 ? "+" : ""}{fmtK(myRealizedPnL)}</span>
+                    </div>
+                  </div>
+                </div>
                 <div style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, marginBottom: 24 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>ADD POSITION</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "end" }}>
@@ -1048,68 +893,58 @@ export default function App() {
                     <button onClick={addPosition} style={{ ...btnStyle(T.green), padding: "8px 20px" }}>Add</button>
                   </div>
                 </div>
-                {/* Positions list */}
                 {myPortfolio.length > 0 && (
                   <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <TH cols={["Ticker", "Status", "Shares", "Cost Basis", "Price/Sell", "P&L", "Return", "Actions"]} />
-                      <tbody>
-                        {myPortfolio.map((p, idx) => {
-                          const isSold = p.status === "sold";
-                          const lp = isSold ? p.sellPrice : (livePrices[p.ticker]?.price || p.costBasis);
-                          const pnl = isSold ? calcRealizedPnL(p.shares, p.costBasis, p.sellPrice) : calcUnrealizedPnL(p.shares, p.costBasis, lp);
-                          const ret = isSold ? calcRealizedReturn(p.costBasis, p.sellPrice) : calcUnrealizedReturn(p.costBasis, lp);
-                          return (
-                            <tr key={p.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)`, opacity: isSold ? 0.6 : 1 }}>
-                              <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{p.ticker}</td>
-                              <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: isSold ? `${T.red}10` : `${T.green}10`, color: isSold ? T.red : T.green, fontFamily: T.mono }}>{isSold ? "SOLD" : "ACTIVE"}</span></td>
-                              <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{p.shares}</td>
-                              <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${p.costBasis.toFixed(2)}</td>
-                              <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${lp.toFixed(2)}</td>
-                              <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
-                              <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
-                              <td style={{ padding: "12px 16px" }}>
-                                <div style={{ display: "flex", gap: 6 }}>
-                                  {!isSold && sellIdx !== idx && <button onClick={() => { setSellIdx(idx); setSellPrice(""); setSellDate(new Date().toISOString().split("T")[0]); }} style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: `${T.amber}08`, color: T.amber, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>Sell</button>}
-                                  {sellIdx === idx && (
-                                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                      <input type="number" step="0.01" value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="Sell $" style={{ ...inputStyle, width: 80, padding: "4px 8px", fontSize: 11 }} />
-                                      <input type="date" value={sellDate} onChange={e => setSellDate(e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px", fontSize: 10 }} />
-                                      <button onClick={() => sellPosition(idx)} style={{ ...btnStyle(T.green), padding: "4px 8px", fontSize: 9 }}>✓</button>
-                                      <button onClick={() => setSellIdx(null)} style={{ ...btnStyle(T.red), padding: "4px 8px", fontSize: 9 }}>✕</button>
-                                    </div>
-                                  )}
-                                  <button onClick={() => removePosition(idx)} style={{ padding: "5px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer", fontFamily: T.mono }}>✕</button>
+                      <TH cols={["Ticker", "Status", "Shares", "Cost", "Price/Sell", "P&L", "Return", "Actions"]} />
+                      <tbody>{myPortfolio.map((p, idx) => {
+                        const isSold = p.status === "sold";
+                        const lp = isSold ? p.sellPrice : (livePrices[p.ticker]?.price || p.costBasis);
+                        const pnl = isSold ? calcRealizedPnL(p.shares, p.costBasis, p.sellPrice) : calcUnrealizedPnL(p.shares, p.costBasis, lp);
+                        const ret = isSold ? calcRealizedReturn(p.costBasis, p.sellPrice) : calcUnrealizedReturn(p.costBasis, lp);
+                        return (<tr key={p.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)`, opacity: isSold ? 0.6 : 1 }}>
+                          <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 13, fontFamily: T.mono }}>{p.ticker}</td>
+                          <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: isSold ? `${T.red}10` : `${T.green}10`, color: isSold ? T.red : T.green, fontFamily: T.mono }}>{isSold ? "SOLD" : "ACTIVE"}</span></td>
+                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>{p.shares}</td>
+                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${p.costBasis.toFixed(2)}</td>
+                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono }}>${lp.toFixed(2)}</td>
+                          <td style={{ padding: "12px 16px", fontSize: 12, fontFamily: T.mono, fontWeight: 600, color: pnl >= 0 ? T.green : T.red }}>{pnl >= 0 ? "+" : ""}${pnl.toLocaleString("en", { maximumFractionDigits: 0 })}</td>
+                          <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: ret >= 0 ? `${T.green}10` : `${T.red}10`, color: ret >= 0 ? T.green : T.red, fontFamily: T.mono }}>{ret >= 0 ? "+" : ""}{ret.toFixed(1)}%</span></td>
+                          <td style={{ padding: "12px 16px" }}>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              {!isSold && sellIdx !== idx && <button onClick={() => { setSellIdx(idx); setSellPrice(""); setSellDate(new Date().toISOString().split("T")[0]); }} style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: `${T.amber}08`, color: T.amber, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>Sell</button>}
+                              {sellIdx === idx && (
+                                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                  <input type="number" step="0.01" value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="Sell $" style={{ ...inputStyle, width: 80, padding: "4px 8px", fontSize: 11 }} />
+                                  <input type="date" value={sellDate} onChange={e => setSellDate(e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px", fontSize: 10 }} />
+                                  <button onClick={() => sellPosition(idx)} style={{ ...btnStyle(T.green), padding: "4px 8px", fontSize: 9 }}>\u2713</button>
+                                  <button onClick={() => setSellIdx(null)} style={{ ...btnStyle(T.red), padding: "4px 8px", fontSize: 9 }}>\u2715</button>
                                 </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
+                              )}
+                              <button onClick={() => removePosition(idx)} style={{ padding: "5px 8px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer", fontFamily: T.mono }}>\u2715</button>
+                            </div>
+                          </td>
+                        </tr>);
+                      })}</tbody>
                     </table>
                   </div>
                 )}
               </div>
             )}
 
-            {/* ── AI Portfolio Management ── */}
+            {/* ── Admin: AI Portfolio ── */}
             {adminTab === "aimgmt" && (
               <div>
-                <div style={{ padding: 16, borderRadius: 10, background: `${T.cyan}08`, border: `1px solid ${T.cyan}20`, marginBottom: 20, fontSize: 12, color: T.cyan, lineHeight: 1.8 }}>
-                  <strong>Automation Options:</strong> For fully automated AI trading, connect to <a href="https://alpaca.markets" target="_blank" rel="noopener" style={{ color: T.cyan, textDecoration: "underline" }}>Alpaca's free paper trading API</a> via a Vercel serverless function. Claude API can generate trade ideas → Alpaca executes. For now, manage trades manually below.
-                </div>
                 <div style={{ padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, marginBottom: 24 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>EXECUTE AI TRADE</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 10 }}>
-                    <span style={{ fontSize: 10, color: T.textDim, fontFamily: T.mono, marginRight: 4 }}>Cash: ${aiCapital.toLocaleString("en", { maximumFractionDigits: 0 })}</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono }}>EXECUTE AI TRADE</div>
+                    <span style={{ fontSize: 10, color: T.cyan, fontFamily: T.mono }}>Cash: {fmtK(aiCapital)}</span>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr auto", gap: 10, alignItems: "end" }}>
-                    <div>
-                      <div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>ACTION</div>
+                    <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>ACTION</div>
                       <select value={aiAction} onChange={e => setAiAction(e.target.value)} style={{ ...inputStyle, width: 80 }}>
                         <option value="BUY">BUY</option><option value="SELL">SELL</option>
-                      </select>
-                    </div>
+                      </select></div>
                     <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>TICKER</div><input value={aiTicker} onChange={e => setAiTicker(e.target.value)} placeholder="AAPL" style={inputStyle} /></div>
                     <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>SHARES</div><input type="number" value={aiShares} onChange={e => setAiShares(e.target.value)} placeholder="100" style={inputStyle} /></div>
                     <div><div style={{ fontSize: 9, color: T.textDim, marginBottom: 4, fontFamily: T.mono }}>PRICE ($)</div><input type="number" step="0.01" value={aiPrice} onChange={e => setAiPrice(e.target.value)} placeholder="150.00" style={inputStyle} /></div>
@@ -1120,40 +955,87 @@ export default function App() {
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 10 }}>CURRENT HOLDINGS</div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                      {aiHoldings.map(h => (
-                        <div key={h.ticker} style={{ padding: "10px 16px", borderRadius: 8, background: T.bgCard, border: `1px solid ${T.border}`, fontFamily: T.mono, fontSize: 12 }}>
-                          <span style={{ fontWeight: 700 }}>{h.ticker}</span> <span style={{ color: T.textDim }}>{h.shares} @ ${h.costBasis.toFixed(2)}</span>
-                        </div>
-                      ))}
+                      {aiHoldings.map(h => {
+                        const lp = livePrices[h.ticker]?.price || h.costBasis;
+                        const pnl = (lp - h.costBasis) * h.shares;
+                        return (
+                          <div key={h.ticker} style={{ padding: "10px 16px", borderRadius: 8, background: T.bgCard, border: `1px solid ${T.border}`, fontFamily: T.mono, fontSize: 12 }}>
+                            <span style={{ fontWeight: 700 }}>{h.ticker}</span> <span style={{ color: T.textDim }}>{h.shares} @ ${h.costBasis.toFixed(2)}</span>
+                            <span style={{ marginLeft: 8, color: pnl >= 0 ? T.green : T.red, fontWeight: 600 }}>{pnl >= 0 ? "+" : ""}{fmtK(pnl)}</span>
+                          </div>
+                        );
+                      })}
                     </div>
+                  </div>
+                )}
+                {aiTrades.length > 0 && (
+                  <div style={{ background: T.bgCard, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden" }}>
+                    <div style={{ padding: "12px 16px", fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, borderBottom: `1px solid ${T.border}` }}>TRADE HISTORY</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <TH cols={["Date", "Action", "Ticker", "Shares", "Price", "Total"]} />
+                      <tbody>{aiTrades.slice(0, 20).map((t, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
+                          <td style={{ padding: "10px 16px", fontSize: 11, color: T.textDim, fontFamily: T.mono }}>{t.date}</td>
+                          <td style={{ padding: "10px 16px" }}><span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: t.action === "BUY" ? `${T.green}10` : `${T.red}10`, color: t.action === "BUY" ? T.green : T.red, fontFamily: T.mono }}>{t.action}</span></td>
+                          <td style={{ padding: "10px 16px", fontWeight: 700, fontSize: 12, fontFamily: T.mono }}>{t.ticker}</td>
+                          <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: T.mono }}>{t.shares}</td>
+                          <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: T.mono }}>${t.price.toFixed(2)}</td>
+                          <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: T.mono, color: t.action === "BUY" ? T.amber : T.cyan }}>{t.action === "BUY" ? "-" : "+"}{fmtK(t.shares * t.price)}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
                   </div>
                 )}
               </div>
             )}
 
-            {/* ── Settings ── */}
+            {/* ── Admin: Settings ── */}
             {adminTab === "settings" && (
               <div>
                 <div style={{ padding: 24, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, marginBottom: 20 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>API CONFIGURATION</div>
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 10, color: T.textDim, marginBottom: 6, fontFamily: T.mono }}>FMP API KEY <span style={{ color: T.amber }}>(required)</span></div>
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="Your Financial Modeling Prep API key" style={{ ...inputStyle, flex: 1 }} />
-                      <button onClick={() => showNotif("API key saved")} style={btnStyle(T.green)}>Save</button>
+                  <div style={{ marginBottom: 20, padding: 16, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: T.accent }}>Financial Modeling Prep (FMP)</div>
+                      <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: fmpKey ? `${T.green}10` : `${T.red}10`, color: fmpKey ? T.green : T.red, fontFamily: T.mono, fontWeight: 700 }}>{fmpKey ? "CONNECTED" : "NOT SET"}</span>
                     </div>
-                    <div style={{ fontSize: 10, color: T.textDim, marginTop: 8, lineHeight: 1.6 }}>
-                      Get a free key at <a href="https://financialmodelingprep.com/developer/docs/" target="_blank" rel="noopener" style={{ color: T.cyan }}>financialmodelingprep.com</a> — 250 requests/day free tier.
-                      Powers: Market Pulse, Stock Analysis, Live Portfolio Prices.
+                    <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+                      <input type="password" value={fmpKey} onChange={e => setFmpKey(e.target.value)} placeholder="Enter your FMP API key..." style={{ ...inputStyle, flex: 1 }} />
                     </div>
+                    <div style={{ fontSize: 10, color: T.textDim, lineHeight: 1.6, marginBottom: 8 }}>
+                      Free key at <a href="https://financialmodelingprep.com/developer/docs/" target="_blank" rel="noopener" style={{ color: T.cyan }}>financialmodelingprep.com</a> \u2014 250 requests/day.
+                    </div>
+                    <div style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>
+                      <span style={{ color: T.green }}>\u25CF</span> Market Pulse (S&P, NASDAQ, DOW, BTC, Gold) &nbsp;
+                      <span style={{ color: T.green }}>\u25CF</span> Market News &nbsp;
+                      <span style={{ color: T.green }}>\u25CF</span> Live Portfolio Prices &nbsp;
+                      <span style={{ color: T.green }}>\u25CF</span> Ticker Price Fetch
+                    </div>
+                  </div>
+                </div>
+                <div style={{ padding: 24, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>API USAGE</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                    {[
+                      { page: "Market Pulse", api: "FMP", uses: "Index quotes + stock news", calls: "~6 per refresh" },
+                      { page: "Stock Picks", api: "None (manual)", uses: "You control everything", calls: "Optional: fetch price" },
+                      { page: "My Portfolio", api: "FMP", uses: "Live price updates", calls: "~1 per 5 min" },
+                      { page: "AI Portfolio", api: "FMP", uses: "Live price updates", calls: "~1 per 5 min" },
+                    ].map(r => (
+                      <div key={r.page} style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}` }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: T.accent, marginBottom: 4 }}>{r.page}</div>
+                        <div style={{ fontSize: 10, color: T.textDim, lineHeight: 1.6 }}>API: {r.api}<br/>Uses: {r.uses}<br/>Calls: {r.calls}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 <div style={{ padding: 24, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>DATA MANAGEMENT</div>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <button onClick={() => { if (confirm("Clear all analyzed stocks?")) { setStocks({}); showNotif("Stocks cleared"); } }} style={btnStyle(T.red)}>Clear Stocks</button>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button onClick={() => { if (confirm("Clear all stock picks?")) { setStockPicks([]); showNotif("Picks cleared"); } }} style={btnStyle(T.red)}>Clear Picks</button>
                     <button onClick={() => { if (confirm("Clear personal portfolio?")) { setMyPortfolio([]); showNotif("Portfolio cleared"); } }} style={btnStyle(T.red)}>Clear My Portfolio</button>
                     <button onClick={() => { if (confirm("Reset AI portfolio to $10M?")) { setAiHoldings([]); setAiTrades([]); setAiCapital(10000000); showNotif("AI Portfolio reset"); } }} style={btnStyle(T.red)}>Reset AI Portfolio</button>
+                    <button onClick={() => { if (confirm("Clear API key?")) { setFmpKey(""); showNotif("API key cleared"); } }} style={btnStyle(T.amber)}>Clear API Key</button>
                   </div>
                 </div>
               </div>
@@ -1168,20 +1050,16 @@ export default function App() {
         )}
       </div>
 
-      {/* FOOTER */}
       <footer style={{ position: "relative", zIndex: 1, borderTop: `1px solid ${T.border}`, padding: "24px 32px", textAlign: "center" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 6 }}>
           <ShipLogo size={16} />
           <span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, fontFamily: T.mono }}>ryzn.io</span>
         </div>
-        <div style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>AI-Powered Stock Analysis · Not Financial Advice · Educational Purposes Only</div>
+        <div style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>AI-Powered Stock Analysis \u00B7 Not Financial Advice \u00B7 Educational Purposes Only</div>
       </footer>
 
-      {/* STOCK PREVIEW MODAL */}
-      {selectedStock && <StockPreview stock={selectedStock} onClose={() => setSelectedStock(null)} isAdmin={isAdmin} onPublish={togglePublish} onUpdateRemarks={updateRemarks} />}
-
-      {/* GLOBAL STYLES */}
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');@keyframes slideIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}*{box-sizing:border-box;margin:0;padding:0}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:2px}::selection{background:rgba(255,255,255,0.15)}select{appearance:none;-webkit-appearance:none}input[type="date"]{color-scheme:dark}`}</style>
+      {selectedStock && <StockPreview stock={selectedStock} onClose={() => setSelectedStock(null)} />}
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');@keyframes slideIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}*{box-sizing:border-box;margin:0;padding:0}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:2px}::selection{background:rgba(255,255,255,0.15)}select{appearance:none;-webkit-appearance:none}input[type="date"]{color-scheme:dark}input[type="range"]::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:white;cursor:pointer;border:2px solid rgba(255,255,255,0.3)}`}</style>
     </div>
   );
 }
