@@ -643,7 +643,7 @@ export default function App() {
   // RENDER
   // ═══════════════════════════════════════════════════
   return (
-    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: T.sans, position: "relative" }}>
+    <div style={{ minHeight: "100vh", width: "100vw", background: T.bg, color: T.text, fontFamily: T.sans, position: "relative" }}>
       <Starfield />
       {/* NOTIFICATION */}
       {notification && <div style={{ position: "fixed", top: 20, right: 20, zIndex: 9999, padding: "12px 20px", borderRadius: 10, background: notification.type === "error" ? `${T.red}20` : `${T.green}20`, border: `1px solid ${notification.type === "error" ? T.red : T.green}30`, color: notification.type === "error" ? T.red : T.green, fontSize: 12, fontWeight: 600, fontFamily: T.mono, animation: "slideIn 0.3s ease" }}>{notification.msg}</div>}
