@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const T = {
@@ -228,11 +229,21 @@ export default function App() {
   const [blend, setBlend] = useState({ dcfWeight: 50, compsWeight: 30, customWeight: 20, customVal: 0, customLabel: "GGM / Other" });
   const [selCS, setSelCS] = useState(null);
 
+  // ═══ PORTFOLIO STATE ═══
+  const [portfolio, setPortfolio] = useState([]);
+  const [pfTicker, setPfTicker] = useState(""); const [pfName, setPfName] = useState(""); const [pfShares, setPfShares] = useState("");
+  const [pfCostBasis, setPfCostBasis] = useState(""); const [pfCurrentPrice, setPfCurrentPrice] = useState("");
+  const [pfSector, setPfSector] = useState(""); const [pfAssetClass, setPfAssetClass] = useState("Equity");
+  const [pfDateAcquired, setPfDateAcquired] = useState(""); const [pfRealizedGains, setPfRealizedGains] = useState("");
+  const [pfNotes, setPfNotes] = useState(""); const [editPf, setEditPf] = useState(null);
+  const [pfSortBy, setPfSortBy] = useState("weight"); const [pfSortDir, setPfSortDir] = useState("desc");
+
   useEffect(() => { setMounted(true); }, []);
-  useEffect(() => { (async () => { const [sp, cs, sc] = await Promise.all([sGet("stockPicks", []), sGet("caseStudies", []), sGet("scenarios", [])]); setStockPicks(sp); setCaseStudies(cs); setScenarios(sc); setReady(true); })(); }, []);
+  useEffect(() => { (async () => { const [sp, cs, sc, pf] = await Promise.all([sGet("stockPicks", []), sGet("caseStudies", []), sGet("scenarios", []), sGet("portfolio", [])]); setStockPicks(sp); setCaseStudies(cs); setScenarios(sc); setPortfolio(pf); setReady(true); })(); }, []);
   useEffect(() => { if (ready) sSet("stockPicks", stockPicks); }, [stockPicks, ready]);
   useEffect(() => { if (ready) sSet("caseStudies", caseStudies); }, [caseStudies, ready]);
   useEffect(() => { if (ready) sSet("scenarios", scenarios); }, [scenarios, ready]);
+  useEffect(() => { if (ready) sSet("portfolio", portfolio); }, [portfolio, ready]);
 
   const notify = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3000); };
   const setDF = (k, v) => setDcf(p => ({ ...p, [k]: v }));
@@ -249,6 +260,49 @@ export default function App() {
   const rmBlock = (i) => setCsBlocks(p => p.filter((_, j) => j !== i));
   const moveBlock = (i, d) => setCsBlocks(p => { const a = [...p]; const n = i + d; if (n < 0 || n >= a.length) return a; [a[i], a[n]] = [a[n], a[i]]; return a; });
   const loadTemplate = () => { setCsBlocks([{ type: "heading", content: "Executive Summary" }, { type: "text", content: "" }, { type: "heading", content: "Investment Thesis" }, { type: "text", content: "" }, { type: "image", url: "", caption: "" }, { type: "heading", content: "Financial Analysis" }, { type: "text", content: "" }, { type: "heading", content: "Risks & Considerations" }, { type: "text", content: "" }, { type: "heading", content: "Conclusion" }, { type: "text", content: "" }]); notify("Template loaded"); };
+
+  // ═══ PORTFOLIO FUNCTIONS ═══
+  const addPortfolioHolding = () => {
+    if (!pfTicker) return;
+    const holding = { id: editPf || Date.now(), ticker: pfTicker.toUpperCase(), name: pfName || pfTicker.toUpperCase(), shares: +pfShares || 0, costBasis: +pfCostBasis || 0, currentPrice: +pfCurrentPrice || 0, sector: pfSector, assetClass: pfAssetClass, dateAcquired: pfDateAcquired, realizedGains: +pfRealizedGains || 0, notes: pfNotes, dateUpdated: new Date().toISOString().split("T")[0] };
+    if (editPf) { setPortfolio(p => p.map(x => x.id === editPf ? holding : x)); notify("Holding updated"); } else { setPortfolio(p => [holding, ...p]); notify("Holding added"); }
+    clearPfForm();
+  };
+  const clearPfForm = () => { setPfTicker(""); setPfName(""); setPfShares(""); setPfCostBasis(""); setPfCurrentPrice(""); setPfSector(""); setPfAssetClass("Equity"); setPfDateAcquired(""); setPfRealizedGains(""); setPfNotes(""); setEditPf(null); };
+  const editPortfolioHolding = (h) => { setPfTicker(h.ticker); setPfName(h.name); setPfShares(h.shares.toString()); setPfCostBasis(h.costBasis.toString()); setPfCurrentPrice(h.currentPrice.toString()); setPfSector(h.sector || ""); setPfAssetClass(h.assetClass || "Equity"); setPfDateAcquired(h.dateAcquired || ""); setPfRealizedGains((h.realizedGains || 0).toString()); setPfNotes(h.notes || ""); setEditPf(h.id); };
+
+  const portfolioStats = useMemo(() => {
+    if (!portfolio.length) return null;
+    const holdings = portfolio.map(h => {
+      const marketValue = h.shares * h.currentPrice;
+      const costValue = h.shares * h.costBasis;
+      const unrealizedGL = marketValue - costValue;
+      const unrealizedPct = costValue > 0 ? (unrealizedGL / costValue) * 100 : 0;
+      return { ...h, marketValue, costValue, unrealizedGL, unrealizedPct };
+    });
+    const totalMarketValue = holdings.reduce((s, h) => s + h.marketValue, 0);
+    const totalCostBasis = holdings.reduce((s, h) => s + h.costValue, 0);
+    const totalUnrealizedGL = totalMarketValue - totalCostBasis;
+    const totalRealizedGains = holdings.reduce((s, h) => s + (h.realizedGains || 0), 0);
+    const totalUnrealizedPct = totalCostBasis > 0 ? (totalUnrealizedGL / totalCostBasis) * 100 : 0;
+    const withWeight = holdings.map(h => ({ ...h, weight: totalMarketValue > 0 ? (h.marketValue / totalMarketValue) * 100 : 0 }));
+    const bySector = {}; withWeight.forEach(h => { const s = h.sector || "Other"; if (!bySector[s]) bySector[s] = 0; bySector[s] += h.marketValue; });
+    const sectorAlloc = Object.entries(bySector).map(([name, value]) => ({ name, value, pct: totalMarketValue > 0 ? (value / totalMarketValue) * 100 : 0 })).sort((a, b) => b.value - a.value);
+    const byClass = {}; withWeight.forEach(h => { const c = h.assetClass || "Other"; if (!byClass[c]) byClass[c] = 0; byClass[c] += h.marketValue; });
+    const classAlloc = Object.entries(byClass).map(([name, value]) => ({ name, value, pct: totalMarketValue > 0 ? (value / totalMarketValue) * 100 : 0 })).sort((a, b) => b.value - a.value);
+    const winners = withWeight.filter(h => h.unrealizedGL > 0).length;
+    const losers = withWeight.filter(h => h.unrealizedGL < 0).length;
+    return { holdings: withWeight, totalMarketValue, totalCostBasis, totalUnrealizedGL, totalRealizedGains, totalUnrealizedPct, sectorAlloc, classAlloc, winners, losers, count: holdings.length };
+  }, [portfolio]);
+
+  const sortedPortfolio = useMemo(() => {
+    if (!portfolioStats) return [];
+    const h = [...portfolioStats.holdings];
+    const dir = pfSortDir === "asc" ? 1 : -1;
+    const sortFns = { weight: (a, b) => (a.weight - b.weight) * dir, ticker: (a, b) => a.ticker.localeCompare(b.ticker) * dir, unrealized: (a, b) => (a.unrealizedGL - b.unrealizedGL) * dir, value: (a, b) => (a.marketValue - b.marketValue) * dir, return: (a, b) => (a.unrealizedPct - b.unrealizedPct) * dir };
+    return h.sort(sortFns[pfSortBy] || sortFns.weight);
+  }, [portfolioStats, pfSortBy, pfSortDir]);
+  const toggleSort = (col) => { if (pfSortBy === col) setPfSortDir(d => d === "asc" ? "desc" : "asc"); else { setPfSortBy(col); setPfSortDir("desc"); } };
 
   const runDCFCalc = () => { if (dcf.currentPrice <= 0 || dcf.sharesOutM <= 0 || dcf.revenueM <= 0) { notify("Fill required: Price, Shares ($M), Revenue ($M)", "error"); return; } if (dcf.wacc <= dcf.terminalGrowth) { notify("WACC must > Terminal Growth", "error"); return; } setDcfRes(runDCF(dcf)); };
   const calcWACC = () => { const ke = wCalc.rf + wCalc.beta * wCalc.erp; const w = ((100 - wCalc.dPct) / 100) * ke + (wCalc.dPct / 100) * wCalc.kd * (1 - wCalc.taxW / 100); setDF("wacc", Math.round(w * 100) / 100); notify(`WACC: ${w.toFixed(2)}%`); setShowWCalc(false); };
@@ -290,7 +344,7 @@ export default function App() {
   const cardS = { padding: 20, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}` };
   const secH = (t) => <div style={{ fontSize: 10, fontWeight: 700, color: T.cyan, fontFamily: T.mono, marginBottom: 10 }}>{t}</div>;
 
-  const navItems = [{ id: "home", label: "Home" }, { id: "casestudies", label: "Case Studies" }, { id: "picks", label: "Stock Picks" }, { id: "valuation", label: "AI-Powered Valuation" }];
+  const navItems = [{ id: "home", label: "Home" }, { id: "casestudies", label: "Case Studies" }, { id: "picks", label: "Stock Picks" }, { id: "portfolio", label: "My Portfolio" }, { id: "valuation", label: "AI-Powered Valuation" }];
   const valTabs = [{ id: "dcf", label: "DCF Model" }, { id: "mc", label: "Monte Carlo" }, { id: "comps", label: "Comps" }, { id: "health", label: "Ratios" }, { id: "scenarios", label: "Scenarios" }, { id: "blended", label: "Blended" }];
 
   return (
@@ -311,7 +365,7 @@ export default function App() {
         {/* HOME */}
         {page === "home" && <div style={{ animation: mounted ? "slideIn 0.5s ease" : "none" }}>
           <div style={{ textAlign: "center", padding: "48px 16px 40px" }}><h1 style={{ fontSize: "clamp(32px, 8vw, 48px)", fontWeight: 900, letterSpacing: "-0.03em", marginBottom: 12 }}>ryzn<span style={{ fontWeight: 400, color: T.textDim }}>.io</span></h1><p style={{ fontSize: 14, color: T.textDim, maxWidth: 520, margin: "0 auto", lineHeight: 1.8 }}>AI-powered stock analysis with curated picks, institutional-grade valuation tools, and in-depth case studies.</p></div>
-          <div className="ryzn-home-grid" style={{ display: "grid", gap: 16, maxWidth: 900, margin: "0 auto 40px" }}>{[["Case Study Library", "Research articles and investment case studies.", "\u25A3", "casestudies"], ["Top Stock Picks", "Curated picks with valuation analysis.", "\u25C8", "picks"], ["AI-Powered Valuation", "DCF, Monte Carlo, comps, ratios, scenarios & blended value.", "\u25CE", "valuation"]].map(([t, d, ic, pg]) => <div key={t} onClick={() => setPage(pg)} style={{ padding: 28, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, cursor: "pointer", transition: "border-color 0.3s" }} onMouseEnter={e => e.currentTarget.style.borderColor = T.borderHover} onMouseLeave={e => e.currentTarget.style.borderColor = T.border}><div style={{ fontSize: 24, marginBottom: 14, opacity: 0.4 }}>{ic}</div><div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{t}</div><div style={{ fontSize: 12, color: T.textDim, lineHeight: 1.7 }}>{d}</div></div>)}</div>
+          <div className="ryzn-home-grid" style={{ display: "grid", gap: 16, maxWidth: 900, margin: "0 auto 40px" }}>{[["Case Study Library", "Research articles and investment case studies.", "\u25A3", "casestudies"], ["Top Stock Picks", "Curated picks with valuation analysis.", "\u25C8", "picks"], ["My Portfolio", "Institutional-grade holdings tracker with P&L analytics.", "\u25C9", "portfolio"], ["AI-Powered Valuation", "DCF, Monte Carlo, comps, ratios, scenarios & blended value.", "\u25CE", "valuation"]].map(([t, d, ic, pg]) => <div key={t} onClick={() => setPage(pg)} style={{ padding: 28, borderRadius: 14, background: T.bgCard, border: `1px solid ${T.border}`, cursor: "pointer", transition: "border-color 0.3s" }} onMouseEnter={e => e.currentTarget.style.borderColor = T.borderHover} onMouseLeave={e => e.currentTarget.style.borderColor = T.border}><div style={{ fontSize: 24, marginBottom: 14, opacity: 0.4 }}>{ic}</div><div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{t}</div><div style={{ fontSize: 12, color: T.textDim, lineHeight: 1.7 }}>{d}</div></div>)}</div>
           {pubPicks.length > 0 && <div style={{ maxWidth: 900, margin: "0 auto" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><h2 style={{ fontSize: 18, fontWeight: 800 }}>Featured Picks</h2><button onClick={() => setPage("picks")} style={{ ...bS(), fontSize: 10 }}>View All {"\u2192"}</button></div><div className="ryzn-cards-grid">{pubPicks.slice(0, 3).map(s => <StockCard key={s.id} stock={s} onClick={() => setSelectedStock(s)} />)}</div></div>}
         </div>}
 
@@ -320,6 +374,166 @@ export default function App() {
         {page === "casestudies" && selCS && <div style={{ maxWidth: 720, margin: "0 auto" }}><button onClick={() => setSelCS(null)} style={{ ...bS(T.textMuted), marginBottom: 20 }}>{"\u2190"} Back</button>{selCS.coverImage && <div style={{ height: 240, borderRadius: 14, background: `url(${selCS.coverImage}) center/cover`, marginBottom: 24, border: `1px solid ${T.border}` }} />}<div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}><span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 4, background: `${T.cyan}10`, color: T.cyan }}>{selCS.category}</span><span style={{ fontSize: 11, color: T.textDim }}>{selCS.date}</span></div><h1 style={{ fontSize: "clamp(22px, 5vw, 32px)", fontWeight: 800, lineHeight: 1.3, marginBottom: 16 }}>{selCS.title}</h1>{selCS.summary && <div style={{ fontSize: 15, color: T.textMuted, lineHeight: 1.8, marginBottom: 24, fontStyle: "italic", borderLeft: `3px solid ${T.cyan}30`, paddingLeft: 16 }}>{selCS.summary}</div>}<RenderBlocks blocks={selCS.blocks || []} /></div>}
 
         {page === "picks" && <div><div style={{ marginBottom: 28 }}><h1 style={{ fontSize: "clamp(24px, 6vw, 30px)", fontWeight: 800, marginBottom: 6 }}>Top Stock Picks</h1></div>{pubPicks.length > 0 ? <div className="ryzn-cards-grid">{pubPicks.map(s => <StockCard key={s.id} stock={s} onClick={() => setSelectedStock(s)} />)}</div> : <div style={{ textAlign: "center", padding: 60, color: T.textDim }}>No published picks yet.</div>}</div>}
+
+        {/* ════════ MY PORTFOLIO ════════ */}
+        {page === "portfolio" && <div>
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+              <div><h1 style={{ fontSize: "clamp(24px, 6vw, 30px)", fontWeight: 800, marginBottom: 4 }}>My Portfolio</h1><p style={{ fontSize: 12, color: T.textDim }}>Holdings & performance tracker</p></div>
+              {portfolioStats && <div style={{ fontSize: 10, color: T.textDim, fontFamily: T.mono, textAlign: "right" }}>Last updated {new Date().toLocaleDateString()}<br/>{portfolioStats.count} position{portfolioStats.count !== 1 ? "s" : ""}</div>}
+            </div>
+          </div>
+
+          {!portfolioStats && <div style={{ textAlign: "center", padding: "80px 16px" }}>
+            <div style={{ fontSize: 40, opacity: 0.15, marginBottom: 16 }}>{"\u25C9"}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: T.textDim, marginBottom: 8 }}>No Holdings Yet</div>
+            <div style={{ fontSize: 12, color: T.textDim }}>Add positions from the Admin panel to get started.</div>
+          </div>}
+
+          {portfolioStats && <>
+            {/* SUMMARY CARDS */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 24 }}>
+              {[
+                ["MARKET VALUE", "$" + portfolioStats.totalMarketValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), T.text],
+                ["COST BASIS", "$" + portfolioStats.totalCostBasis.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), T.textMuted],
+                ["UNREALIZED P&L", (portfolioStats.totalUnrealizedGL >= 0 ? "+$" : "-$") + Math.abs(portfolioStats.totalUnrealizedGL).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), portfolioStats.totalUnrealizedGL >= 0 ? T.green : T.red],
+                ["UNREALIZED %", pct(portfolioStats.totalUnrealizedPct), portfolioStats.totalUnrealizedPct >= 0 ? T.green : T.red],
+                ["REALIZED GAINS", (portfolioStats.totalRealizedGains >= 0 ? "+$" : "-$") + Math.abs(portfolioStats.totalRealizedGains).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), portfolioStats.totalRealizedGains >= 0 ? T.green : T.red],
+                ["WIN / LOSS", `${portfolioStats.winners}W / ${portfolioStats.losers}L`, T.cyan],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ padding: 18, borderRadius: 12, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color, fontFamily: T.mono }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* ALLOCATION BARS */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }} className="ig2">
+              {/* SECTOR ALLOCATION */}
+              <div style={{ ...cardS }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 16 }}>SECTOR ALLOCATION</div>
+                {portfolioStats.sectorAlloc.map((s, i) => {
+                  const colors = [T.cyan, T.green, T.purple, T.amber, T.pink, T.red, T.text];
+                  const c = colors[i % colors.length];
+                  return <div key={s.name} style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: T.textMuted }}>{s.name}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: c, fontFamily: T.mono }}>{s.pct.toFixed(1)}%</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${s.pct}%`, background: c, borderRadius: 3, transition: "width 0.6s ease" }} />
+                    </div>
+                  </div>;
+                })}
+              </div>
+
+              {/* ASSET CLASS ALLOCATION */}
+              <div style={{ ...cardS }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 16 }}>ASSET CLASS</div>
+                {portfolioStats.classAlloc.map((s, i) => {
+                  const colors = [T.cyan, T.amber, T.purple, T.green, T.pink, T.red];
+                  const c = colors[i % colors.length];
+                  return <div key={s.name} style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: T.textMuted }}>{s.name}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: c, fontFamily: T.mono }}>{s.pct.toFixed(1)}%</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${s.pct}%`, background: c, borderRadius: 3, transition: "width 0.6s ease" }} />
+                    </div>
+                  </div>;
+                })}
+              </div>
+            </div>
+
+            {/* HOLDINGS TABLE */}
+            <div style={{ ...cardS, padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "18px 20px 14px", borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em" }}>HOLDINGS</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["weight", "Weight"], ["ticker", "A-Z"], ["value", "Value"], ["return", "Return"]].map(([id, label]) => (
+                    <button key={id} onClick={() => toggleSort(id)} style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: pfSortBy === id ? `${T.cyan}15` : "rgba(255,255,255,0.03)", color: pfSortBy === id ? T.cyan : T.textDim, fontSize: 9, fontWeight: 600, cursor: "pointer", fontFamily: T.mono }}>
+                      {label} {pfSortBy === id && (pfSortDir === "desc" ? "\u25BC" : "\u25B2")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
+                  <thead><tr>
+                    {["Ticker", "Shares", "Avg Cost", "Mkt Price", "Market Value", "Weight", "Unrealized P&L", "Return %", "Realized"].map(h => (
+                      <th key={h} style={{ padding: "10px 14px", textAlign: h === "Ticker" ? "left" : "right", fontSize: 9, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.08em", textTransform: "uppercase", borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {sortedPortfolio.map(h => (
+                      <tr key={h.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)`, transition: "background 0.15s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <td style={{ padding: "12px 14px" }}>
+                          <div style={{ fontWeight: 800, fontSize: 13, fontFamily: T.mono }}>{h.ticker}</div>
+                          <div style={{ fontSize: 10, color: T.textDim, marginTop: 1 }}>{h.name}{h.sector ? ` · ${h.sector}` : ""}</div>
+                        </td>
+                        <td style={{ padding: "12px 14px", textAlign: "right", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>{h.shares.toLocaleString()}</td>
+                        <td style={{ padding: "12px 14px", textAlign: "right", fontSize: 12, fontFamily: T.mono, color: T.textMuted }}>${h.costBasis.toFixed(2)}</td>
+                        <td style={{ padding: "12px 14px", textAlign: "right", fontSize: 12, fontFamily: T.mono, fontWeight: 700 }}>${h.currentPrice.toFixed(2)}</td>
+                        <td style={{ padding: "12px 14px", textAlign: "right", fontSize: 12, fontFamily: T.mono, fontWeight: 600 }}>${h.marketValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td style={{ padding: "12px 14px", textAlign: "right" }}>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <div style={{ width: 40, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(h.weight, 100)}%`, background: T.cyan, borderRadius: 2 }} /></div>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: T.cyan, fontFamily: T.mono }}>{h.weight.toFixed(1)}%</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: "12px 14px", textAlign: "right", fontSize: 12, fontWeight: 700, fontFamily: T.mono, color: h.unrealizedGL >= 0 ? T.green : T.red }}>
+                          {h.unrealizedGL >= 0 ? "+$" : "-$"}{Math.abs(h.unrealizedGL).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ padding: "12px 14px", textAlign: "right" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: `${h.unrealizedPct >= 0 ? T.green : T.red}10`, color: h.unrealizedPct >= 0 ? T.green : T.red, fontFamily: T.mono }}>{pct(h.unrealizedPct)}</span>
+                        </td>
+                        <td style={{ padding: "12px 14px", textAlign: "right", fontSize: 12, fontFamily: T.mono, color: (h.realizedGains || 0) >= 0 ? (h.realizedGains ? T.green : T.textDim) : T.red }}>
+                          {h.realizedGains ? ((h.realizedGains >= 0 ? "+$" : "-$") + Math.abs(h.realizedGains).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop: `2px solid ${T.border}`, background: "rgba(255,255,255,0.015)" }}>
+                      <td style={{ padding: "12px 14px", fontWeight: 800, fontSize: 12, fontFamily: T.mono }}>TOTAL</td>
+                      <td style={{ padding: "12px 14px" }}></td><td style={{ padding: "12px 14px" }}></td><td style={{ padding: "12px 14px" }}></td>
+                      <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 800, fontSize: 13, fontFamily: T.mono }}>${portfolioStats.totalMarketValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 700, fontSize: 11, fontFamily: T.mono, color: T.cyan }}>100.0%</td>
+                      <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 800, fontSize: 13, fontFamily: T.mono, color: portfolioStats.totalUnrealizedGL >= 0 ? T.green : T.red }}>
+                        {portfolioStats.totalUnrealizedGL >= 0 ? "+$" : "-$"}{Math.abs(portfolioStats.totalUnrealizedGL).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td style={{ padding: "12px 14px", textAlign: "right" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: `${portfolioStats.totalUnrealizedPct >= 0 ? T.green : T.red}15`, color: portfolioStats.totalUnrealizedPct >= 0 ? T.green : T.red, fontFamily: T.mono }}>{pct(portfolioStats.totalUnrealizedPct)}</span>
+                      </td>
+                      <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 800, fontSize: 13, fontFamily: T.mono, color: portfolioStats.totalRealizedGains >= 0 ? T.green : T.red }}>
+                        {portfolioStats.totalRealizedGains !== 0 ? ((portfolioStats.totalRealizedGains >= 0 ? "+$" : "-$") + Math.abs(portfolioStats.totalRealizedGains).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : "—"}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* INDIVIDUAL HOLDING NOTES (if any have notes) */}
+            {portfolioStats.holdings.some(h => h.notes) && <div style={{ ...cardS, marginTop: 20 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: T.textDim, fontFamily: T.mono, letterSpacing: "0.1em", marginBottom: 14 }}>POSITION NOTES</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+                {portfolioStats.holdings.filter(h => h.notes).map(h => (
+                  <div key={h.id} style={{ padding: 14, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, fontFamily: T.mono, marginBottom: 6 }}>{h.ticker}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{h.notes}</div>
+                  </div>
+                ))}
+              </div>
+            </div>}
+
+            <div style={{ textAlign: "center", fontSize: 9, color: T.textDim, marginTop: 24, padding: "16px 0", borderTop: `1px solid ${T.border}` }}>
+              ryzn.io Portfolio Tracker | Not Financial Advice | {new Date().toLocaleDateString()}
+            </div>
+          </>}
+        </div>}
 
         {/* ════════ VALUATION ════════ */}
         {page === "valuation" && <div>
@@ -486,10 +700,64 @@ export default function App() {
         {/* ADMIN */}
         {page === "admin" && isAdmin && <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24, flexWrap: "wrap" }}><h1 style={{ fontSize: "clamp(24px, 6vw, 30px)", fontWeight: 800 }}>Admin</h1><span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", background: `${T.amber}08`, color: T.amber, borderRadius: 4 }}>RESTRICTED</span></div>
-          <div style={{ display: "flex", gap: 4, marginBottom: 24, flexWrap: "wrap" }}>{[["picks", "Stock Picks"], ["casestudies", "Case Studies"], ["settings", "Settings"]].map(([id, l]) => <button key={id} onClick={() => setAdminTab(id)} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: adminTab === id ? `${T.amber}08` : "transparent", color: adminTab === id ? T.amber : T.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{l}</button>)}</div>
+          <div style={{ display: "flex", gap: 4, marginBottom: 24, flexWrap: "wrap" }}>{[["picks", "Stock Picks"], ["casestudies", "Case Studies"], ["portfolio", "Portfolio"], ["settings", "Settings"]].map(([id, l]) => <button key={id} onClick={() => setAdminTab(id)} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: adminTab === id ? `${T.amber}08` : "transparent", color: adminTab === id ? T.amber : T.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{l}</button>)}</div>
           {adminTab === "picks" && <div><div style={{ ...cardS, marginBottom: 24 }}><div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>{editP ? "EDIT" : "ADD"} PICK</div><div className="ig4" style={{ marginBottom: 12 }}><div><div className="lbl">TICKER</div><input value={pT} onChange={e => setPT(e.target.value)} style={iS} /></div><div><div className="lbl">NAME</div><input value={pN} onChange={e => setPN(e.target.value)} style={iS} /></div><div><div className="lbl">PRICE</div><input type="number" step="0.01" value={pP} onChange={e => setPP(e.target.value)} style={iS} /></div><div><div className="lbl">SECTOR</div><input value={pSe} onChange={e => setPSe(e.target.value)} style={iS} /></div></div><div className="ig2" style={{ marginBottom: 12 }}><div><div className="lbl">SCORE: <span style={{ color: pSc >= 66 ? T.green : pSc >= 33 ? T.amber : T.red, fontWeight: 700 }}>{pSc}</span></div><input type="range" min="0" max="100" value={pSc} onChange={e => setPSc(+e.target.value)} style={{ width: "100%", height: 4, appearance: "none", background: `linear-gradient(to right, ${T.red}, ${T.amber}, ${T.green})`, borderRadius: 2 }} /></div><div><div className="lbl">RATING</div><select value={pR} onChange={e => setPR(e.target.value)} style={iS}><option>BUY</option><option>HOLD</option><option>SELL</option></select></div></div><div style={{ marginBottom: 12 }}><div className="lbl">NOTES</div><textarea value={pNo} onChange={e => setPNo(e.target.value)} rows={3} style={{ ...iS, resize: "vertical" }} /></div><div style={{ display: "flex", gap: 8 }}><button onClick={addPick} style={bS(T.green)}>{editP ? "Update" : "Publish"}</button>{editP && <button onClick={clearPF} style={bS(T.textDim)}>Cancel</button>}</div></div>{stockPicks.length > 0 && <div className="ryzn-table-wrap"><table style={{ width: "100%", borderCollapse: "collapse" }}><TH cols={["Ticker", "Price", "Rating", "Actions"]} /><tbody>{stockPicks.map(s => <tr key={s.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}><td style={{ padding: "10px 14px", fontWeight: 700, fontSize: 13 }}>{s.ticker}</td><td style={{ padding: "10px 14px", fontSize: 12 }}>${s.price?.toFixed(2)}</td><td style={{ padding: "10px 14px" }}><span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 3, background: (s.rating === "BUY" ? T.green : s.rating === "HOLD" ? T.amber : T.red) + "10", color: s.rating === "BUY" ? T.green : s.rating === "HOLD" ? T.amber : T.red }}>{s.rating}</span></td><td style={{ padding: "10px 14px" }}><div style={{ display: "flex", gap: 6 }}><button onClick={() => epk(s)} style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer" }}>Edit</button><button onClick={() => setStockPicks(p => p.map(x => x.id === s.id ? { ...x, published: !x.published } : x))} style={{ padding: "4px 10px", borderRadius: 4, border: "none", background: s.published ? `${T.red}08` : `${T.green}08`, color: s.published ? T.red : T.green, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>{s.published ? "Hide" : "Pub"}</button><button onClick={() => setStockPicks(p => p.filter(x => x.id !== s.id))} style={{ padding: "4px 8px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer" }}>{"\u2715"}</button></div></td></tr>)}</tbody></table></div>}</div>}
           {adminTab === "casestudies" && <div><div style={{ ...cardS, marginBottom: 24 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono }}>{editCS ? "EDIT" : "NEW"} ARTICLE</div><button onClick={loadTemplate} style={bS(T.amber)}>Load Template</button></div><div className="ig2" style={{ marginBottom: 12 }}><div><div className="lbl">TITLE</div><input value={csTitle} onChange={e => setCsTitle(e.target.value)} style={iS} /></div><div><div className="lbl">CATEGORY</div><select value={csCat} onChange={e => setCsCat(e.target.value)} style={iS}>{["Analysis", "Case Study", "Market Commentary", "Sector Research", "Earnings Review", "Strategy"].map(c => <option key={c}>{c}</option>)}</select></div></div><div style={{ marginBottom: 12 }}><div className="lbl">COVER IMAGE URL</div><input value={csCover} onChange={e => setCsCover(e.target.value)} style={iS} /></div><div style={{ marginBottom: 12 }}><div className="lbl">SUMMARY</div><textarea value={csSummary} onChange={e => setCsSummary(e.target.value)} rows={2} style={{ ...iS, resize: "vertical" }} /></div><div style={{ marginBottom: 12 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}><div className="lbl" style={{ marginBottom: 0 }}>CONTENT BLOCKS</div><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}><button onClick={() => addBlock("heading")} style={{ ...bS(T.text), fontSize: 9, padding: "4px 10px" }}>+ Bold Heading</button><button onClick={() => addBlock("text")} style={{ ...bS(T.textMuted), fontSize: 9, padding: "4px 10px" }}>+ Text</button><button onClick={() => addBlock("image")} style={{ ...bS(T.cyan), fontSize: 9, padding: "4px 10px" }}>+ Image</button></div></div>{csBlocks.length === 0 && <div style={{ padding: 20, textAlign: "center", color: T.textDim, fontSize: 12, border: `1px dashed ${T.border}`, borderRadius: 8 }}>No blocks. Use buttons or "Load Template".</div>}{csBlocks.map((b, i) => <div key={i} style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.02)", border: `1px solid ${b.type === "heading" ? "rgba(255,255,255,0.12)" : T.border}`, marginBottom: 8 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}><span style={{ fontSize: 9, fontWeight: 700, color: b.type === "heading" ? T.text : b.type === "image" ? T.cyan : T.textMuted, fontFamily: T.mono }}>{b.type === "heading" ? "\u2726 BOLD HEADING" : b.type === "image" ? "\u25A3 IMAGE" : "\u2261 TEXT"}</span><div style={{ display: "flex", gap: 4 }}>{i > 0 && <button onClick={() => moveBlock(i, -1)} style={{ background: "none", border: `1px solid ${T.border}`, color: T.textDim, cursor: "pointer", fontSize: 10, borderRadius: 4, padding: "1px 6px" }}>{"\u25B2"}</button>}{i < csBlocks.length - 1 && <button onClick={() => moveBlock(i, 1)} style={{ background: "none", border: `1px solid ${T.border}`, color: T.textDim, cursor: "pointer", fontSize: 10, borderRadius: 4, padding: "1px 6px" }}>{"\u25BC"}</button>}<button onClick={() => rmBlock(i)} style={{ background: `${T.red}08`, border: `1px solid ${T.red}20`, color: T.red, cursor: "pointer", fontSize: 10, borderRadius: 4, padding: "1px 6px" }}>{"\u2715"}</button></div></div>{b.type === "heading" && <input value={b.content} onChange={e => updBlock(i, "content", e.target.value)} style={{ ...iS, fontWeight: 800, fontSize: 15 }} />}{b.type === "text" && <textarea value={b.content} onChange={e => updBlock(i, "content", e.target.value)} rows={4} style={{ ...iS, resize: "vertical", lineHeight: 1.7 }} />}{b.type === "image" && <div><input value={b.url} onChange={e => updBlock(i, "url", e.target.value)} placeholder="Image URL" style={{ ...iS, marginBottom: 6 }} /><input value={b.caption || ""} onChange={e => updBlock(i, "caption", e.target.value)} placeholder="Caption" style={{ ...iS, fontSize: 11 }} />{b.url && <div style={{ marginTop: 8, borderRadius: 8, overflow: "hidden", border: `1px solid ${T.border}`, maxHeight: 100 }}><img src={b.url} alt="" style={{ width: "100%", display: "block", objectFit: "cover", maxHeight: 100 }} onError={e => e.target.style.display = "none"} /></div>}</div>}</div>)}</div><div style={{ display: "flex", gap: 8 }}><button onClick={addCS} style={bS(T.green)}>{editCS ? "Update" : "Publish"}</button>{editCS && <button onClick={clearCSF} style={bS(T.textDim)}>Cancel</button>}</div></div>{caseStudies.length > 0 && <div className="ryzn-table-wrap"><table style={{ width: "100%", borderCollapse: "collapse" }}><TH cols={["Title", "Category", "Actions"]} /><tbody>{caseStudies.map(cs => <tr key={cs.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}><td style={{ padding: "10px 14px", fontWeight: 700, fontSize: 12, maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cs.title}</td><td style={{ padding: "10px 14px", fontSize: 11, color: T.textMuted }}>{cs.category}</td><td style={{ padding: "10px 14px" }}><div style={{ display: "flex", gap: 6 }}><button onClick={() => ecsF(cs)} style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer" }}>Edit</button><button onClick={() => setCaseStudies(p => p.map(x => x.id === cs.id ? { ...x, published: !x.published } : x))} style={{ padding: "4px 10px", borderRadius: 4, border: "none", background: cs.published ? `${T.red}08` : `${T.green}08`, color: cs.published ? T.red : T.green, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>{cs.published ? "Hide" : "Pub"}</button><button onClick={() => setCaseStudies(p => p.filter(x => x.id !== cs.id))} style={{ padding: "4px 8px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer" }}>{"\u2715"}</button></div></td></tr>)}</tbody></table></div>}</div>}
-          {adminTab === "settings" && <div style={cardS}><div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>DATA MANAGEMENT</div><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><button onClick={() => { if (confirm("Clear picks?")) { setStockPicks([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Picks</button><button onClick={() => { if (confirm("Clear articles?")) { setCaseStudies([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Articles</button><button onClick={() => { if (confirm("Clear scenarios?")) { setScenarios([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Scenarios</button></div></div>}
+          {/* ADMIN: PORTFOLIO */}
+          {adminTab === "portfolio" && <div>
+            <div style={{ ...cardS, marginBottom: 24 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>{editPf ? "EDIT" : "ADD"} HOLDING</div>
+              <div className="ig4" style={{ marginBottom: 12 }}>
+                <div><div className="lbl">TICKER</div><input value={pfTicker} onChange={e => setPfTicker(e.target.value)} placeholder="AAPL" style={iS} /></div>
+                <div><div className="lbl">COMPANY NAME</div><input value={pfName} onChange={e => setPfName(e.target.value)} placeholder="Apple Inc." style={iS} /></div>
+                <div><div className="lbl">SHARES</div><input type="number" step="0.001" value={pfShares} onChange={e => setPfShares(e.target.value)} style={iS} /></div>
+                <div><div className="lbl">COST BASIS ($/share)</div><input type="number" step="0.01" value={pfCostBasis} onChange={e => setPfCostBasis(e.target.value)} style={iS} /></div>
+              </div>
+              <div className="ig4" style={{ marginBottom: 12 }}>
+                <div><div className="lbl">CURRENT PRICE ($)</div><input type="number" step="0.01" value={pfCurrentPrice} onChange={e => setPfCurrentPrice(e.target.value)} style={iS} /></div>
+                <div><div className="lbl">SECTOR</div><input value={pfSector} onChange={e => setPfSector(e.target.value)} placeholder="Technology" style={iS} /></div>
+                <div><div className="lbl">ASSET CLASS</div><select value={pfAssetClass} onChange={e => setPfAssetClass(e.target.value)} style={iS}>{["Equity", "Fixed Income", "ETF", "Options", "Crypto", "Commodity", "REIT", "Cash Equiv.", "Other"].map(c => <option key={c}>{c}</option>)}</select></div>
+                <div><div className="lbl">DATE ACQUIRED</div><input type="date" value={pfDateAcquired} onChange={e => setPfDateAcquired(e.target.value)} style={iS} /></div>
+              </div>
+              <div className="ig2" style={{ marginBottom: 12 }}>
+                <div><div className="lbl">REALIZED GAINS ($)</div><input type="number" step="0.01" value={pfRealizedGains} onChange={e => setPfRealizedGains(e.target.value)} placeholder="0.00" style={iS} /><div style={{ fontSize: 8, color: T.textDim, marginTop: 2 }}>Enter gains/losses from sold portions. Negative = loss.</div></div>
+                <div><div className="lbl">NOTES</div><input value={pfNotes} onChange={e => setPfNotes(e.target.value)} placeholder="Optional notes..." style={iS} /></div>
+              </div>
+              {pfTicker && +pfShares > 0 && +pfCostBasis > 0 && +pfCurrentPrice > 0 && (() => {
+                const mv = (+pfShares) * (+pfCurrentPrice); const cb = (+pfShares) * (+pfCostBasis); const gl = mv - cb; const glp = cb > 0 ? (gl / cb) * 100 : 0;
+                return <div style={{ padding: 14, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}`, marginBottom: 12, display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ fontSize: 9, color: T.textDim, fontFamily: T.mono }}>PREVIEW</div>
+                  <div><span style={{ fontSize: 9, color: T.textDim }}>MKT VALUE </span><span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.mono }}>${mv.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
+                  <div><span style={{ fontSize: 9, color: T.textDim }}>P&L </span><span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.mono, color: gl >= 0 ? T.green : T.red }}>{gl >= 0 ? "+" : ""}{gl.toLocaleString(undefined, { minimumFractionDigits: 2 })} ({glp >= 0 ? "+" : ""}{glp.toFixed(1)}%)</span></div>
+                </div>;
+              })()}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={addPortfolioHolding} style={bS(T.green)}>{editPf ? "Update Holding" : "Add Holding"}</button>
+                {editPf && <button onClick={clearPfForm} style={bS(T.textDim)}>Cancel</button>}
+              </div>
+            </div>
+
+            {portfolio.length > 0 && <div className="ryzn-table-wrap">
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <TH cols={["Ticker", "Shares", "Cost", "Price", "Realized", "Actions"]} />
+                <tbody>{portfolio.map(h => (
+                  <tr key={h.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                    <td style={{ padding: "10px 14px" }}><div style={{ fontWeight: 700, fontSize: 13 }}>{h.ticker}</div><div style={{ fontSize: 10, color: T.textDim }}>{h.name}</div></td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, fontFamily: T.mono }}>{h.shares.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, fontFamily: T.mono }}>${h.costBasis.toFixed(2)}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, fontFamily: T.mono }}>${h.currentPrice.toFixed(2)}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, fontFamily: T.mono, color: (h.realizedGains || 0) >= 0 ? (h.realizedGains ? T.green : T.textDim) : T.red }}>{h.realizedGains ? "$" + h.realizedGains.toLocaleString() : "—"}</td>
+                    <td style={{ padding: "10px 14px" }}><div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => editPortfolioHolding(h)} style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.textDim, fontSize: 10, cursor: "pointer" }}>Edit</button>
+                      <button onClick={() => setPortfolio(p => p.filter(x => x.id !== h.id))} style={{ padding: "4px 8px", borderRadius: 4, border: `1px solid ${T.border}`, background: "transparent", color: T.red, fontSize: 10, cursor: "pointer" }}>{"\u2715"}</button>
+                    </div></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>}
+          </div>}
+
+          {adminTab === "settings" && <div style={cardS}><div style={{ fontSize: 11, fontWeight: 700, color: T.textDim, fontFamily: T.mono, marginBottom: 14 }}>DATA MANAGEMENT</div><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><button onClick={() => { if (confirm("Clear picks?")) { setStockPicks([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Picks</button><button onClick={() => { if (confirm("Clear articles?")) { setCaseStudies([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Articles</button><button onClick={() => { if (confirm("Clear scenarios?")) { setScenarios([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Scenarios</button><button onClick={() => { if (confirm("Clear portfolio?")) { setPortfolio([]); notify("Cleared"); } }} style={bS(T.red)}>Clear Portfolio</button></div></div>}
         </div>}
         {page === "admin" && !isAdmin && <div style={{ textAlign: "center", padding: "80px 16px" }}><div style={{ fontSize: 15, fontWeight: 600, color: T.textDim, marginTop: 16 }}>Admin Access Required</div></div>}
       </div>
@@ -511,7 +779,7 @@ export default function App() {
         .ryzn-nav-links{display:flex;gap:2px;overflow-x:auto;-webkit-overflow-scrolling:touch}
         .ryzn-content{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:32px 24px 80px}
         .ryzn-table-wrap{background:rgba(10,10,16,0.75);border-radius:14px;border:1px solid rgba(255,255,255,0.06);overflow-x:auto}
-        .ryzn-home-grid{grid-template-columns:repeat(3,1fr)}
+        .ryzn-home-grid{grid-template-columns:repeat(4,1fr)}
         .ryzn-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
         .ryzn-dcf-layout{grid-template-columns:1fr 1fr}
         .ig2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
